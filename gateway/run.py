@@ -2421,17 +2421,66 @@ class GatewayRunner:
 
         return model, runtime_kwargs
 
-    def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
-        """Build the effective model/runtime config for a single turn.
+    @staticmethod
+    def _load_reasoning_policy() -> dict:
+        """Load adaptive reasoning/routing policy from config.yaml."""
+        try:
+            import yaml as _y
+            from agent.reasoning_policy import DEFAULT_REASONING_POLICY
 
-        Always uses the session's primary model/provider.  If `/fast` is
-        enabled and the model supports Priority Processing / Anthropic fast
-        mode, attach `request_overrides` so the API call is marked
-        accordingly.
-        """
-        from hermes_cli.models import resolve_fast_mode_overrides
+            cfg_path = _hermes_home / "config.yaml"
+            raw_policy = {}
+            if cfg_path.exists():
+                with open(cfg_path, encoding="utf-8") as _f:
+                    cfg = _y.safe_load(_f) or {}
+                agent_cfg = cfg.get("agent") or {}
+                if isinstance(agent_cfg, dict):
+                    raw_policy = agent_cfg.get("reasoning_policy") or {}
+            merged = dict(DEFAULT_REASONING_POLICY)
+            if isinstance(raw_policy, dict):
+                merged.update(raw_policy)
+                if isinstance(DEFAULT_REASONING_POLICY.get("reasoning"), dict):
+                    reasoning = dict(DEFAULT_REASONING_POLICY["reasoning"])
+                    if isinstance(raw_policy.get("reasoning"), dict):
+                        reasoning.update(raw_policy["reasoning"])
+                    merged["reasoning"] = reasoning
+            return merged
+        except Exception:
+            try:
+                from agent.reasoning_policy import DEFAULT_REASONING_POLICY
 
-        runtime = {
+                return dict(DEFAULT_REASONING_POLICY)
+            except Exception:
+                return {"enabled": False}
+
+    @staticmethod
+    def _get_codex_quota_state() -> object | None:
+        """Fetch/cache Codex quota for routing without blocking every turn."""
+        try:
+            from agent.reasoning_policy import CodexQuotaState
+        except Exception:
+            return None
+        now = time.monotonic()
+        cache = getattr(GatewayRunner, "_codex_quota_cache", None)
+        if isinstance(cache, dict) and now - float(cache.get("ts", 0.0)) < 60:
+            return cache.get("state")
+        try:
+            from agent.account_usage import fetch_account_usage
+
+            snapshot = fetch_account_usage("openai-codex")
+            state = CodexQuotaState.from_usage_snapshot(snapshot)
+        except Exception as exc:
+            logger.debug("Codex quota snapshot unavailable for routing: %s", exc)
+            state = CodexQuotaState(unavailable=True)
+        try:
+            setattr(GatewayRunner, "_codex_quota_cache", {"ts": now, "state": state})
+        except Exception:
+            pass
+        return state
+
+    @staticmethod
+    def _runtime_dict_from_kwargs(runtime_kwargs: dict) -> dict:
+        return {
             "api_key": runtime_kwargs.get("api_key"),
             "base_url": runtime_kwargs.get("base_url"),
             "provider": runtime_kwargs.get("provider"),
@@ -2440,18 +2489,95 @@ class GatewayRunner:
             "args": list(runtime_kwargs.get("args") or []),
             "credential_pool": runtime_kwargs.get("credential_pool"),
         }
+
+    @staticmethod
+    def _route_signature(model: str, runtime: dict) -> tuple:
+        return (
+            model,
+            runtime.get("provider"),
+            runtime.get("base_url"),
+            runtime.get("api_mode"),
+            runtime.get("command"),
+            tuple(runtime.get("args") or []),
+        )
+
+    def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
+        """Build the effective model/runtime config for a single turn.
+
+        Applies adaptive reasoning and Codex-first quota-aware routing when
+        ``agent.reasoning_policy.enabled`` is true.  Otherwise preserves the
+        session's primary model/provider exactly as before.
+        """
+        from hermes_cli.models import resolve_fast_mode_overrides
+
+        runtime = self._runtime_dict_from_kwargs(runtime_kwargs)
         route = {
             "model": model,
             "runtime": runtime,
-            "signature": (
-                model,
-                runtime["provider"],
-                runtime["base_url"],
-                runtime["api_mode"],
-                runtime["command"],
-                tuple(runtime["args"]),
-            ),
+            "signature": self._route_signature(model, runtime),
+            "fallback_model": self._fallback_model,
         }
+
+        policy = self._load_reasoning_policy()
+        if bool(policy.get("enabled")):
+            try:
+                from agent.reasoning_policy import (
+                    decide_turn_route,
+                    fallback_chain_for_profile,
+                    is_codex_provider,
+                )
+
+                quota = self._get_codex_quota_state() if is_codex_provider(runtime.get("provider")) else None
+                decision = decide_turn_route(
+                    user_message,
+                    primary_provider=runtime.get("provider"),
+                    primary_model=model,
+                    quota=quota,
+                    policy=policy,
+                )
+                route["reasoning_config"] = decision.reasoning_config
+                route["reasoning_effort"] = decision.reasoning_effort
+                route["route_label"] = decision.route_label
+                route["routing_decision"] = decision
+
+                if is_codex_provider(runtime.get("provider")):
+                    # Dynamic chain is ordered by task profile so mid-turn Codex
+                    # exhaustion falls to Flash for easy tasks and Pro for high/xhigh
+                    # work without asking the user.
+                    route["fallback_model"] = fallback_chain_for_profile(policy, decision.profile)
+
+                if (decision.provider, decision.model) != (runtime.get("provider"), model):
+                    try:
+                        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+                        resolved = resolve_runtime_provider(
+                            requested=decision.provider,
+                            target_model=decision.model,
+                        )
+                        runtime = self._runtime_dict_from_kwargs(resolved)
+                        route["model"] = decision.model
+                        route["runtime"] = runtime
+                        route["signature"] = self._route_signature(decision.model, runtime)
+                        logger.info(
+                            "Adaptive routing selected %s/%s reason=%s effort=%s",
+                            decision.provider,
+                            decision.model,
+                            decision.fallback_reason or "policy",
+                            decision.reasoning_effort,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Adaptive route to %s/%s failed, staying on primary: %s",
+                            decision.provider,
+                            decision.model,
+                            exc,
+                        )
+                        route["model"] = model
+                        route["runtime"] = self._runtime_dict_from_kwargs(runtime_kwargs)
+                        route["signature"] = self._route_signature(model, route["runtime"])
+                        route["route_label"] = "codex" if is_codex_provider(route["runtime"].get("provider")) else None
+            except Exception as exc:
+                logger.debug("Adaptive reasoning policy skipped: %s", exc)
 
         service_tier = getattr(self, "_service_tier", None)
         if not service_tier:
@@ -8833,6 +8959,9 @@ class GatewayRunner:
                     context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
                     context_length=agent_result.get("context_length") or None,
                     cwd=os.environ.get("TERMINAL_CWD", ""),
+                    provider=agent_result.get("provider"),
+                    reasoning_effort=agent_result.get("reasoning_effort"),
+                    route_label=agent_result.get("route_label"),
                 )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
@@ -11697,6 +11826,8 @@ class GatewayRunner:
             self._reasoning_config = reasoning_config
             self._service_tier = self._load_service_tier()
             turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+            effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
+            turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
 
             # Enrich the prompt with image descriptions so the background
             # agent can see user-attached images (same as the main flow).
@@ -11724,7 +11855,7 @@ class GatewayRunner:
                     verbose_logging=False,
                     enabled_toolsets=enabled_toolsets,
                     disabled_toolsets=disabled_toolsets,
-                    reasoning_config=reasoning_config,
+                    reasoning_config=effective_reasoning_config,
                     service_tier=self._service_tier,
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
@@ -11742,7 +11873,7 @@ class GatewayRunner:
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
                     session_db=self._session_db,
-                    fallback_model=self._fallback_model,
+                    fallback_model=turn_fallback_model,
                 )
                 try:
                     return agent.run_conversation(
@@ -16611,6 +16742,8 @@ class GatewayRunner:
                 )
 
             turn_route = self._resolve_turn_agent_config(message, model, runtime_kwargs)
+            effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
+            turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
 
             # Check agent cache — reuse the AIAgent from the previous message
             # in this session to preserve the frozen system prompt and tool
@@ -16652,7 +16785,7 @@ class GatewayRunner:
                     disabled_toolsets=disabled_toolsets,
                     ephemeral_system_prompt=combined_ephemeral or None,
                     prefill_messages=self._prefill_messages or None,
-                    reasoning_config=reasoning_config,
+                    reasoning_config=effective_reasoning_config,
                     service_tier=self._service_tier,
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
@@ -16671,7 +16804,7 @@ class GatewayRunner:
                     thread_id=source.thread_id,
                     gateway_session_key=session_key,
                     session_db=self._session_db,
-                    fallback_model=self._fallback_model,
+                    fallback_model=turn_fallback_model,
                 )
                 if _cache_lock and _cache is not None:
                     with _cache_lock:
@@ -16686,9 +16819,23 @@ class GatewayRunner:
             agent.stream_delta_callback = _stream_delta_cb
             agent.interim_assistant_callback = _interim_assistant_cb if _want_interim_messages else None
             agent.status_callback = _status_callback_sync
-            agent.reasoning_config = reasoning_config
+            agent.reasoning_config = effective_reasoning_config
             agent.service_tier = self._service_tier
             agent.request_overrides = turn_route.get("request_overrides") or {}
+            try:
+                if isinstance(turn_fallback_model, list):
+                    agent._fallback_chain = [
+                        f for f in turn_fallback_model
+                        if isinstance(f, dict) and f.get("provider") and f.get("model")
+                    ]
+                elif isinstance(turn_fallback_model, dict) and turn_fallback_model.get("provider") and turn_fallback_model.get("model"):
+                    agent._fallback_chain = [turn_fallback_model]
+                else:
+                    agent._fallback_chain = []
+                agent._fallback_model = agent._fallback_chain[0] if agent._fallback_chain else None
+                agent._fallback_index = 0
+            except Exception:
+                logger.debug("Unable to refresh per-turn fallback chain", exc_info=True)
 
             _bg_review_release = threading.Event()
             _bg_review_pending: list[str] = []
@@ -17115,6 +17262,21 @@ class GatewayRunner:
                 _output_toks = getattr(_agent, "session_completion_tokens", 0)
                 _context_length = getattr(_agent.context_compressor, "context_length", 0) or 0
             _resolved_model = getattr(_agent, "model", None) if _agent else None
+            _resolved_provider = getattr(_agent, "provider", None) if _agent else turn_route.get("runtime", {}).get("provider")
+            _resolved_reasoning_effort = None
+            if isinstance(effective_reasoning_config, dict):
+                _resolved_reasoning_effort = effective_reasoning_config.get("effort")
+            _resolved_route_label = turn_route.get("route_label")
+            if (
+                _agent
+                and (
+                    _resolved_provider != turn_route.get("runtime", {}).get("provider")
+                    or _resolved_model != turn_route.get("model")
+                )
+            ):
+                # A mid-turn fallback changed the actual model/provider.  Let
+                # runtime_footer derive the label from the final backend.
+                _resolved_route_label = None
 
             if not final_response:
                 error_msg = f"⚠️ {result['error']}" if result.get("error") else ""
@@ -17135,6 +17297,9 @@ class GatewayRunner:
                     "input_tokens": _input_toks,
                     "output_tokens": _output_toks,
                     "model": _resolved_model,
+                    "provider": _resolved_provider,
+                    "reasoning_effort": _resolved_reasoning_effort,
+                    "route_label": _resolved_route_label,
                     "context_length": _context_length,
                 }
             
@@ -17295,6 +17460,9 @@ class GatewayRunner:
                 "input_tokens": _input_toks,
                 "output_tokens": _output_toks,
                 "model": _resolved_model,
+                "provider": _resolved_provider,
+                "reasoning_effort": _resolved_reasoning_effort,
+                "route_label": _resolved_route_label,
                 "context_length": _context_length,
                 "session_id": effective_session_id,
                 "response_previewed": result.get("response_previewed", False),
