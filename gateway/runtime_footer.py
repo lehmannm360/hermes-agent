@@ -25,6 +25,7 @@ piecemeal, the footer is sent as a separate trailing message via
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -89,26 +90,76 @@ def resolve_footer_config(
     return resolved
 
 
+def _format_used_percent(value: Any) -> str:
+    """Format a quota used percentage for the compact route footer."""
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(pct):
+        return ""
+    pct = max(0, min(100, round(pct)))
+    return f"{pct}%"
+
+
+def _codex_quota_used_percent_from_snapshot(snapshot: Any) -> Optional[float]:
+    """Extract the Codex 5-hour/session used percentage from an account snapshot.
+
+    Codex's usage API labels the 5-hour window as ``Session`` today.  Prefer
+    session/five-hour-looking labels, but fall back to the first populated
+    window so minor upstream label changes don't make the footer disappear.
+    """
+    windows = tuple(getattr(snapshot, "windows", ()) or ())
+    first_populated: Optional[float] = None
+    for window in windows:
+        raw_used = getattr(window, "used_percent", None)
+        if raw_used is None:
+            continue
+        try:
+            used = float(raw_used)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(used):
+            continue
+        if first_populated is None:
+            first_populated = used
+        label = str(getattr(window, "label", "") or "").strip().lower()
+        if "session" in label or "5" in label or "five" in label:
+            return used
+    return first_populated
+
+
 def _route_reasoning_label(
     *,
     provider: Optional[str],
     model: Optional[str],
     reasoning_effort: Optional[str],
     route_label: Optional[str],
+    codex_quota_used_percent: Any = None,
 ) -> str:
     effort = str(reasoning_effort or "").strip().lower()
     if not effort:
         return ""
     label = str(route_label or "").strip()
+    provider_norm = str(provider or "").strip().lower()
     if not label:
-        provider_norm = str(provider or "").strip().lower()
         if provider_norm in {"openai-codex", "codex"}:
             label = "codex"
         elif provider_norm == "deepseek":
             label = _model_short(model) or "deepseek"
         else:
             label = _model_short(model) or provider_norm
-    return f"{label} | {effort}" if label else ""
+    if not label:
+        return ""
+    effort_label = effort
+    if provider_norm in {"openai-codex", "codex"} and "mini" in _model_short(model).lower():
+        effort_label = f"mini-{effort}"
+    parts = [label, effort_label]
+    if provider_norm in {"openai-codex", "codex"}:
+        usage = _format_used_percent(codex_quota_used_percent)
+        if usage:
+            parts.append(usage)
+    return " | ".join(parts)
 
 
 def format_runtime_footer(
@@ -121,6 +172,7 @@ def format_runtime_footer(
     provider: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     route_label: Optional[str] = None,
+    codex_quota_used_percent: Any = None,
 ) -> str:
     """Render the footer line, or return "" if no fields have data.
 
@@ -147,6 +199,7 @@ def format_runtime_footer(
                 model=model,
                 reasoning_effort=reasoning_effort,
                 route_label=route_label,
+                codex_quota_used_percent=codex_quota_used_percent,
             )
             if rr:
                 parts.append(rr)
@@ -168,6 +221,7 @@ def build_footer_line(
     provider: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     route_label: Optional[str] = None,
+    codex_quota_used_percent: Any = None,
 ) -> str:
     """Top-level entry point used by gateway/run.py.
 
@@ -187,4 +241,5 @@ def build_footer_line(
         provider=provider,
         reasoning_effort=reasoning_effort,
         route_label=route_label,
+        codex_quota_used_percent=codex_quota_used_percent,
     )

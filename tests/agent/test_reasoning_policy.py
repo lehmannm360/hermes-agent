@@ -19,7 +19,7 @@ def _quota(percent: float) -> CodexQuotaState:
     return CodexQuotaState(percent_remaining=percent, reset_at=None, unavailable=False)
 
 
-def test_simple_healthy_codex_uses_low_effort_and_codex_footer() -> None:
+def test_tiny_healthy_codex_uses_mini_low_and_compact_footer() -> None:
     decision = decide_turn_route(
         "Hi",
         primary_provider="openai-codex",
@@ -29,10 +29,25 @@ def test_simple_healthy_codex_uses_low_effort_and_codex_footer() -> None:
     )
 
     assert decision.provider == "openai-codex"
-    assert decision.model == "gpt-5.5"
+    assert decision.model == "gpt-5.4-mini"
     assert decision.reasoning_effort == "low"
     assert decision.route_label == "codex"
-    assert format_route_footer(decision) == "codex | low"
+    assert format_route_footer(decision) == "codex | mini-low"
+
+
+def test_easy_healthy_codex_uses_mini_medium_to_avoid_low_reasoning_mistakes() -> None:
+    decision = decide_turn_route(
+        "Summarize this short config and tell me if anything looks wrong.",
+        primary_provider="openai-codex",
+        primary_model="gpt-5.5",
+        quota=_quota(95),
+        policy=_policy(enabled=True),
+    )
+
+    assert decision.provider == "openai-codex"
+    assert decision.model == "gpt-5.4-mini"
+    assert decision.reasoning_effort == "medium"
+    assert format_route_footer(decision) == "codex | mini-medium"
 
 
 def test_hard_planning_task_healthy_codex_stays_on_codex_with_xhigh_reasoning() -> None:
@@ -46,6 +61,7 @@ def test_hard_planning_task_healthy_codex_stays_on_codex_with_xhigh_reasoning() 
     )
 
     assert decision.provider == "openai-codex"
+    assert decision.model == "gpt-5.5"
     assert decision.reasoning_effort == "xhigh"
     assert format_route_footer(decision) == "codex | xhigh"
 

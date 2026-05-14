@@ -29,9 +29,18 @@ DEFAULT_REASONING_POLICY: dict[str, Any] = {
     "deepseek_provider": "deepseek",
     "deepseek_flash_model": "deepseek-v4-flash",
     "deepseek_pro_model": "deepseek-v4-pro",
+    "codex_primary_model": "gpt-5.5",
+    "codex_fast_model": "gpt-5.4-mini",
+    "codex_model_by_difficulty": {
+        "tiny": "gpt-5.4-mini",
+        "easy": "gpt-5.4-mini",
+        "medium": "gpt-5.5",
+        "hard": "gpt-5.5",
+        "very_hard": "gpt-5.5",
+    },
     "reasoning": {
         "tiny": "low",
-        "easy": "low",
+        "easy": "medium",
         "medium": "medium",
         "hard": "high",
         "very_hard": "xhigh",
@@ -207,20 +216,20 @@ def decide_turn_route(
         q = quota or CodexQuotaState(unavailable=True)
         remaining = q.percent_remaining
         if remaining is None or q.unavailable:
-            return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
+            return _codex_decision(policy, primary_provider, primary_model, profile)
 
         low = float(_policy_get(policy, "codex_low_quota_threshold_percent") or 4.0)
         emergency = float(_policy_get(policy, "codex_emergency_threshold_percent") or 2.0)
         if remaining <= emergency:
             if profile.difficulty in {"tiny", "easy"} and bool(_policy_get(policy, "allow_simple_codex_below_low_threshold")):
-                return _primary_decision(primary_provider, primary_model, _cap_profile(profile, "low"), route_label="codex")
+                return _codex_decision(policy, primary_provider, primary_model, _cap_profile(profile, "low"))
             return _deepseek_decision(policy, profile, fallback_reason="codex_emergency_quota")
         if remaining <= low:
             behavior = str(_policy_get(policy, "low_quota_hard_task_behavior") or "use_codex_until_error").strip().lower()
             if behavior in {"fallback_if_unsafe", "fallback_huge", "fallback"} and profile.huge_or_unsafe:
                 return _deepseek_decision(policy, profile, fallback_reason="codex_low_quota_huge_task")
-            return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
-        return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
+            return _codex_decision(policy, primary_provider, primary_model, profile)
+        return _codex_decision(policy, primary_provider, primary_model, profile)
 
     return _primary_decision(primary_provider, primary_model, profile)
 
@@ -248,6 +257,35 @@ def _primary_decision(
         profile=profile,
         runtime_provider=provider,
     )
+
+
+def _codex_decision(
+    policy: Mapping[str, Any],
+    provider: str,
+    primary_model: str,
+    profile: TaskProfile,
+) -> TurnRouteDecision:
+    """Choose the cheapest safe Codex model for the task profile."""
+    model = _codex_model_for_profile(policy, profile, primary_model)
+    return _primary_decision(provider, model, profile, route_label="codex")
+
+
+def _codex_model_for_profile(
+    policy: Mapping[str, Any],
+    profile: TaskProfile,
+    primary_model: str,
+) -> str:
+    configured = _policy_get(policy, "codex_model_by_difficulty")
+    if isinstance(configured, Mapping):
+        candidate = str(configured.get(profile.difficulty) or "").strip()
+        if candidate:
+            return candidate
+
+    primary = str(_policy_get(policy, "codex_primary_model") or primary_model or "gpt-5.5").strip()
+    fast = str(_policy_get(policy, "codex_fast_model") or "gpt-5.4-mini").strip()
+    if profile.difficulty in {"tiny", "easy"} and fast:
+        return fast
+    return primary or primary_model
 
 
 def _deepseek_decision(policy: Mapping[str, Any], profile: TaskProfile, *, fallback_reason: str) -> TurnRouteDecision:
@@ -279,11 +317,17 @@ def format_route_footer(decision: TurnRouteDecision | Mapping[str, Any]) -> str:
     if isinstance(decision, TurnRouteDecision):
         label = decision.route_label
         effort = decision.reasoning_effort
+        model = decision.model
+        provider = decision.provider
     else:
-        label = str(decision.get("route_label") or _route_label(decision.get("provider"), decision.get("model")))
+        provider = decision.get("provider")
+        model = decision.get("model")
+        label = str(decision.get("route_label") or _route_label(provider, model))
         effort = str(decision.get("reasoning_effort") or decision.get("effort") or "").strip().lower()
     if not label or not effort:
         return ""
+    if is_codex_provider(str(provider or "")) and "mini" in str(model or "").rsplit("/", 1)[-1].lower():
+        effort = f"mini-{effort}"
     return f"{label} | {effort}"
 
 
