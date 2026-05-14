@@ -50,6 +50,21 @@ def test_easy_healthy_codex_uses_mini_medium_to_avoid_low_reasoning_mistakes() -
     assert format_route_footer(decision) == "codex | mini-medium"
 
 
+def test_trivial_capital_question_does_not_match_api_inside_capital() -> None:
+    decision = decide_turn_route(
+        "What is the capital of England?",
+        primary_provider="openai-codex",
+        primary_model="gpt-5.5",
+        quota=_quota(95),
+        policy=_policy(enabled=True),
+    )
+
+    assert decision.profile.difficulty == "easy"
+    assert decision.profile.score == 0
+    assert decision.model == "gpt-5.4-mini"
+    assert decision.reasoning_effort == "medium"
+
+
 def test_hard_planning_task_healthy_codex_stays_on_codex_with_xhigh_reasoning() -> None:
     decision = decide_turn_route(
         "Implement adaptive quota-aware model routing across the gateway, add tests, "

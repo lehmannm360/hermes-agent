@@ -122,6 +122,15 @@ def _policy_reasoning(policy: Mapping[str, Any], difficulty: str) -> str:
     return value
 
 
+def _keyword_matches(compact_text: str, keyword: str) -> bool:
+    keyword = keyword.strip().lower()
+    if not keyword:
+        return False
+    if " " in keyword:
+        return keyword in compact_text
+    return re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", compact_text) is not None
+
+
 def classify_task(message: Any, policy: Mapping[str, Any] | None = None) -> TaskProfile:
     """Classify task complexity with deterministic, conservative heuristics."""
     policy = policy or DEFAULT_REASONING_POLICY
@@ -146,10 +155,10 @@ def classify_task(message: Any, policy: Mapping[str, Any] | None = None) -> Task
         "install", "explain", "why", "how", "calculate", "inspect", "check",
     )
     for kw in hard_keywords:
-        if kw in compact:
+        if _keyword_matches(compact, kw):
             score += 2
     for kw in medium_keywords:
-        if kw in compact:
+        if _keyword_matches(compact, kw):
             score += 1
     if word_count > 80:
         score += 3
