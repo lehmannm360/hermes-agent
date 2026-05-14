@@ -9,7 +9,7 @@ Config (``~/.hermes/config.yaml``)::
     display:
       runtime_footer:
         enabled: true                       # off by default
-        fields: [model, context_pct, cwd]   # order shown; drop any to hide
+        fields: [model, context_pct, cwd]   # or [route_reasoning] for `codex | xhigh`
 
 Per-platform overrides live under ``display.platforms.<platform>.runtime_footer``.
 Users can toggle the global setting with ``/footer on|off`` from both the CLI
@@ -89,6 +89,28 @@ def resolve_footer_config(
     return resolved
 
 
+def _route_reasoning_label(
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+    route_label: Optional[str],
+) -> str:
+    effort = str(reasoning_effort or "").strip().lower()
+    if not effort:
+        return ""
+    label = str(route_label or "").strip()
+    if not label:
+        provider_norm = str(provider or "").strip().lower()
+        if provider_norm in {"openai-codex", "codex"}:
+            label = "codex"
+        elif provider_norm == "deepseek":
+            label = _model_short(model) or "deepseek"
+        else:
+            label = _model_short(model) or provider_norm
+    return f"{label} | {effort}" if label else ""
+
+
 def format_runtime_footer(
     *,
     model: Optional[str],
@@ -96,6 +118,9 @@ def format_runtime_footer(
     context_length: Optional[int],
     cwd: Optional[str] = None,
     fields: Iterable[str] = _DEFAULT_FIELDS,
+    provider: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> str:
     """Render the footer line, or return "" if no fields have data.
 
@@ -116,6 +141,15 @@ def format_runtime_footer(
             rel = _home_relative_cwd(cwd or os.environ.get("TERMINAL_CWD", ""))
             if rel:
                 parts.append(rel)
+        elif field == "route_reasoning":
+            rr = _route_reasoning_label(
+                provider=provider,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                route_label=route_label,
+            )
+            if rr:
+                parts.append(rr)
         # Unknown field names are silently ignored.
 
     if not parts:
@@ -131,6 +165,9 @@ def build_footer_line(
     context_tokens: int,
     context_length: Optional[int],
     cwd: Optional[str] = None,
+    provider: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> str:
     """Top-level entry point used by gateway/run.py.
 
@@ -147,4 +184,7 @@ def build_footer_line(
         context_length=context_length,
         cwd=cwd,
         fields=cfg.get("fields") or _DEFAULT_FIELDS,
+        provider=provider,
+        reasoning_effort=reasoning_effort,
+        route_label=route_label,
     )

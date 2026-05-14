@@ -1,0 +1,313 @@
+"""Adaptive reasoning and quota-aware model routing policy.
+
+This module is deliberately pure and side-effect free: callers provide the
+current user message, primary runtime, and any quota/error snapshot.  The policy
+returns a small decision object that the gateway/CLI can apply without baking
+network or config access into the classifier itself.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+import re
+from typing import Any, Mapping, Optional
+
+
+_REASONING_ORDER = {"none": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "xhigh": 5}
+_REASONING_LEVELS = {"low", "medium", "high", "xhigh"}
+
+DEFAULT_REASONING_POLICY: dict[str, Any] = {
+    "enabled": False,
+    "fallback_autonomy": True,
+    "codex_low_quota_threshold_percent": 4.0,
+    "codex_emergency_threshold_percent": 2.0,
+    "allow_simple_codex_below_low_threshold": True,
+    # User preference: preserve Codex as long as possible between 2–4%; let
+    # existing runtime fallback handle a real quota/rate-limit error.
+    "low_quota_hard_task_behavior": "use_codex_until_error",
+    "deepseek_provider": "deepseek",
+    "deepseek_flash_model": "deepseek-v4-flash",
+    "deepseek_pro_model": "deepseek-v4-pro",
+    "reasoning": {
+        "tiny": "low",
+        "easy": "low",
+        "medium": "medium",
+        "hard": "high",
+        "very_hard": "xhigh",
+    },
+}
+
+
+@dataclass(frozen=True)
+class CodexQuotaState:
+    """Codex quota state used by the router.
+
+    ``percent_remaining`` is the most constrained usable remaining quota window
+    (usually the minimum of session and weekly windows).  ``None`` means the
+    usage endpoint was unavailable, in which case the policy keeps Codex.
+    """
+
+    percent_remaining: Optional[float] = None
+    reset_at: Optional[datetime] = None
+    unavailable: bool = False
+
+    @classmethod
+    def from_usage_snapshot(cls, snapshot: Any) -> "CodexQuotaState":
+        if not snapshot or getattr(snapshot, "unavailable_reason", None):
+            return cls(unavailable=True)
+        remaining_values: list[float] = []
+        reset_at: Optional[datetime] = None
+        for window in getattr(snapshot, "windows", ()) or ():
+            used = getattr(window, "used_percent", None)
+            if used is None:
+                continue
+            try:
+                remaining_values.append(max(0.0, 100.0 - float(used)))
+            except (TypeError, ValueError):
+                continue
+            candidate_reset = getattr(window, "reset_at", None)
+            if candidate_reset is not None and (reset_at is None or candidate_reset < reset_at):
+                reset_at = candidate_reset
+        if not remaining_values:
+            return cls(unavailable=True)
+        return cls(percent_remaining=min(remaining_values), reset_at=reset_at, unavailable=False)
+
+
+@dataclass(frozen=True)
+class TaskProfile:
+    difficulty: str
+    reasoning_effort: str
+    score: int
+    huge_or_unsafe: bool = False
+
+
+@dataclass(frozen=True)
+class TurnRouteDecision:
+    provider: str
+    model: str
+    reasoning_effort: str
+    route_label: str
+    profile: TaskProfile
+    runtime_provider: Optional[str] = None
+    fallback_reason: str = ""
+
+    @property
+    def reasoning_config(self) -> dict[str, str]:
+        return {"effort": self.reasoning_effort}
+
+
+def _policy_get(policy: Mapping[str, Any], key: str) -> Any:
+    if key in policy:
+        return policy[key]
+    return DEFAULT_REASONING_POLICY.get(key)
+
+
+def _policy_reasoning(policy: Mapping[str, Any], difficulty: str) -> str:
+    configured = _policy_get(policy, "reasoning")
+    value = "medium"
+    if isinstance(configured, Mapping):
+        value = str(configured.get(difficulty) or value).strip().lower()
+    if value not in _REASONING_LEVELS:
+        value = "medium"
+    return value
+
+
+def classify_task(message: Any, policy: Mapping[str, Any] | None = None) -> TaskProfile:
+    """Classify task complexity with deterministic, conservative heuristics."""
+    policy = policy or DEFAULT_REASONING_POLICY
+    text = _stringify_message(message)
+    compact = " ".join(text.lower().split())
+    words = re.findall(r"[\w/.-]+", compact)
+    word_count = len(words)
+    score = 0
+
+    if word_count <= 4 and len(compact) <= 32:
+        difficulty = "tiny"
+        return TaskProfile(difficulty, _policy_reasoning(policy, difficulty), score=0)
+
+    hard_keywords = (
+        "implement", "refactor", "debug", "root cause", "production", "outage",
+        "security", "review", "migrate", "architecture", "routing", "quota",
+        "fallback", "gateway", "multi-file", "codebase", "repository", "tests",
+        "integration", "regression", "deploy", "api", "database", "concurrency",
+    )
+    medium_keywords = (
+        "plan", "design", "analyze", "compare", "summarize", "configure", "setup",
+        "install", "explain", "why", "how", "calculate", "inspect", "check",
+    )
+    for kw in hard_keywords:
+        if kw in compact:
+            score += 2
+    for kw in medium_keywords:
+        if kw in compact:
+            score += 1
+    if word_count > 80:
+        score += 3
+    elif word_count > 35:
+        score += 2
+    elif word_count > 15:
+        score += 1
+    if any(marker in text for marker in ("```", "Traceback", "diff --git", "ERROR", "Exception")):
+        score += 3
+    if re.search(r"\b(run|write|add|patch|modify|create|fix)\b", compact):
+        score += 1
+
+    huge_or_unsafe = score >= 8 or word_count > 120 or "production" in compact or "outage" in compact
+    if score >= 7:
+        difficulty = "very_hard"
+    elif score >= 5:
+        difficulty = "hard"
+    elif score >= 2:
+        difficulty = "medium"
+    else:
+        difficulty = "easy"
+    return TaskProfile(difficulty, _policy_reasoning(policy, difficulty), score=score, huge_or_unsafe=huge_or_unsafe)
+
+
+def is_codex_provider(provider: Optional[str]) -> bool:
+    return (provider or "").strip().lower() in {"openai-codex", "codex"}
+
+
+def is_codex_quota_error(error: Any) -> bool:
+    """Return True for Codex usage/quota/rate exhaustion errors."""
+    if not error:
+        return False
+    text = str(error).lower()
+    if not any(token in text for token in ("quota", "usage limit", "rate limit", "rate_limit", "limit reached", "too many requests")):
+        return False
+    # Avoid treating auth/config problems as quota fallback triggers.
+    if any(token in text for token in ("invalid api key", "unauthorized", "forbidden", "permission", "authentication")):
+        return False
+    return True
+
+
+def decide_turn_route(
+    message: Any,
+    *,
+    primary_provider: Optional[str],
+    primary_model: str,
+    quota: Optional[CodexQuotaState],
+    policy: Mapping[str, Any] | None = None,
+    codex_error: Any = None,
+) -> TurnRouteDecision:
+    """Choose provider/model and reasoning effort for one user turn."""
+    policy = policy or DEFAULT_REASONING_POLICY
+    profile = classify_task(message, policy)
+    primary_provider = (primary_provider or "").strip()
+    primary_model = (primary_model or "").strip()
+
+    if not bool(_policy_get(policy, "enabled")):
+        return _primary_decision(primary_provider, primary_model, profile)
+
+    if is_codex_provider(primary_provider):
+        if is_codex_quota_error(codex_error):
+            return _deepseek_decision(policy, profile, fallback_reason="codex_quota_error")
+
+        q = quota or CodexQuotaState(unavailable=True)
+        remaining = q.percent_remaining
+        if remaining is None or q.unavailable:
+            return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
+
+        low = float(_policy_get(policy, "codex_low_quota_threshold_percent") or 4.0)
+        emergency = float(_policy_get(policy, "codex_emergency_threshold_percent") or 2.0)
+        if remaining <= emergency:
+            if profile.difficulty in {"tiny", "easy"} and bool(_policy_get(policy, "allow_simple_codex_below_low_threshold")):
+                return _primary_decision(primary_provider, primary_model, _cap_profile(profile, "low"), route_label="codex")
+            return _deepseek_decision(policy, profile, fallback_reason="codex_emergency_quota")
+        if remaining <= low:
+            behavior = str(_policy_get(policy, "low_quota_hard_task_behavior") or "use_codex_until_error").strip().lower()
+            if behavior in {"fallback_if_unsafe", "fallback_huge", "fallback"} and profile.huge_or_unsafe:
+                return _deepseek_decision(policy, profile, fallback_reason="codex_low_quota_huge_task")
+            return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
+        return _primary_decision(primary_provider, primary_model, profile, route_label="codex")
+
+    return _primary_decision(primary_provider, primary_model, profile)
+
+
+def _cap_profile(profile: TaskProfile, max_effort: str) -> TaskProfile:
+    effort = profile.reasoning_effort
+    if _REASONING_ORDER.get(effort, 3) > _REASONING_ORDER.get(max_effort, 2):
+        effort = max_effort
+    return TaskProfile(profile.difficulty, effort, profile.score, profile.huge_or_unsafe)
+
+
+def _primary_decision(
+    provider: str,
+    model: str,
+    profile: TaskProfile,
+    *,
+    route_label: Optional[str] = None,
+) -> TurnRouteDecision:
+    label = route_label or _route_label(provider, model)
+    return TurnRouteDecision(
+        provider=provider,
+        model=model,
+        reasoning_effort=profile.reasoning_effort,
+        route_label=label,
+        profile=profile,
+        runtime_provider=provider,
+    )
+
+
+def _deepseek_decision(policy: Mapping[str, Any], profile: TaskProfile, *, fallback_reason: str) -> TurnRouteDecision:
+    provider = str(_policy_get(policy, "deepseek_provider") or "deepseek").strip() or "deepseek"
+    hard = profile.difficulty in {"hard", "very_hard"} or profile.reasoning_effort in {"high", "xhigh"}
+    model_key = "deepseek_pro_model" if hard else "deepseek_flash_model"
+    model = str(_policy_get(policy, model_key) or ("deepseek-v4-pro" if hard else "deepseek-v4-flash")).strip()
+    return TurnRouteDecision(
+        provider=provider,
+        model=model,
+        reasoning_effort=profile.reasoning_effort,
+        route_label=model,
+        profile=profile,
+        runtime_provider=provider,
+        fallback_reason=fallback_reason,
+    )
+
+
+def _route_label(provider: Optional[str], model: Optional[str]) -> str:
+    provider_norm = (provider or "").strip().lower()
+    if provider_norm in {"openai-codex", "codex"}:
+        return "codex"
+    if provider_norm == "deepseek":
+        return (model or "deepseek").rsplit("/", 1)[-1]
+    return (model or provider or "model").rsplit("/", 1)[-1]
+
+
+def format_route_footer(decision: TurnRouteDecision | Mapping[str, Any]) -> str:
+    if isinstance(decision, TurnRouteDecision):
+        label = decision.route_label
+        effort = decision.reasoning_effort
+    else:
+        label = str(decision.get("route_label") or _route_label(decision.get("provider"), decision.get("model")))
+        effort = str(decision.get("reasoning_effort") or decision.get("effort") or "").strip().lower()
+    if not label or not effort:
+        return ""
+    return f"{label} | {effort}"
+
+
+def fallback_chain_for_profile(policy: Mapping[str, Any], profile: TaskProfile) -> list[dict[str, str]]:
+    """Return an ordered DeepSeek fallback chain for mid-turn Codex exhaustion."""
+    provider = str(_policy_get(policy, "deepseek_provider") or "deepseek").strip() or "deepseek"
+    flash = str(_policy_get(policy, "deepseek_flash_model") or "deepseek-v4-flash").strip()
+    pro = str(_policy_get(policy, "deepseek_pro_model") or "deepseek-v4-pro").strip()
+    hard = profile.difficulty in {"hard", "very_hard"} or profile.reasoning_effort in {"high", "xhigh"}
+    ordered = [pro, flash] if hard else [flash, pro]
+    return [{"provider": provider, "model": model} for model in ordered if model]
+
+
+def _stringify_message(message: Any) -> str:
+    if isinstance(message, str):
+        return message
+    if isinstance(message, list):
+        parts: list[str] = []
+        for item in message:
+            if isinstance(item, Mapping):
+                value = item.get("text") or item.get("content") or ""
+                if isinstance(value, str):
+                    parts.append(value)
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(message or "")

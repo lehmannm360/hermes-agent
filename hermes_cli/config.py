@@ -520,6 +520,27 @@ DEFAULT_CONFIG = {
         # only controls how inbound user images are presented.
         "image_input_mode": "auto",
         "disabled_toolsets": [],
+        # Adaptive reasoning effort + Codex-first quota-aware fallback routing.
+        # Kept Codex-primary by default; DeepSeek is used only for emergency
+        # quota/rate-limit conditions or explicit policy overrides.
+        "reasoning_policy": {
+            "enabled": False,
+            "fallback_autonomy": True,
+            "codex_low_quota_threshold_percent": 4,
+            "codex_emergency_threshold_percent": 2,
+            "allow_simple_codex_below_low_threshold": True,
+            "low_quota_hard_task_behavior": "use_codex_until_error",
+            "deepseek_provider": "deepseek",
+            "deepseek_flash_model": "deepseek-v4-flash",
+            "deepseek_pro_model": "deepseek-v4-pro",
+            "reasoning": {
+                "tiny": "low",
+                "easy": "low",
+                "medium": "medium",
+                "hard": "high",
+                "very_hard": "xhigh",
+            },
+        },
     },
     
     "terminal": {

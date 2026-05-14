@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from gateway.runtime_footer import (
     _home_relative_cwd,
     _model_short,
@@ -147,6 +146,20 @@ def test_format_footer_unknown_field_silently_ignored():
     assert out == "gpt-5.4 · 50%"
 
 
+def test_format_footer_route_reasoning_field_uses_compact_pipe_separator():
+    out = format_runtime_footer(
+        model="openai/gpt-5.5",
+        provider="openai-codex",
+        reasoning_effort="xhigh",
+        route_label="codex",
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+        fields=("route_reasoning",),
+    )
+    assert out == "codex | xhigh"
+
+
 # ---------------------------------------------------------------------------
 # resolve_footer_config
 # ---------------------------------------------------------------------------
@@ -246,6 +259,28 @@ def test_build_footer_per_platform_off_suppresses():
         cwd="/tmp",
     )
     assert out == ""
+
+
+def test_build_footer_route_reasoning_for_model_reasoning_footnote():
+    out = build_footer_line(
+        user_config={
+            "display": {
+                "runtime_footer": {
+                    "enabled": True,
+                    "fields": ["route_reasoning"],
+                }
+            }
+        },
+        platform_key="telegram",
+        model="gpt-5.5",
+        provider="openai-codex",
+        reasoning_effort="xhigh",
+        route_label="codex",
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+    )
+    assert out == "codex | xhigh"
 
 
 def test_build_footer_no_data_returns_empty_even_when_enabled():
