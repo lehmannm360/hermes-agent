@@ -4,9 +4,11 @@ appended to final gateway replies."""
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 from gateway.runtime_footer import (
+    _codex_quota_used_percent_from_snapshot,
     _home_relative_cwd,
     _model_short,
     build_footer_line,
@@ -158,6 +160,44 @@ def test_format_footer_route_reasoning_field_uses_compact_pipe_separator():
         fields=("route_reasoning",),
     )
     assert out == "codex | xhigh"
+
+
+def test_format_footer_codex_route_reasoning_includes_five_hour_quota_used_percent():
+    out = format_runtime_footer(
+        model="gpt-5.4-mini",
+        provider="openai-codex",
+        reasoning_effort="low",
+        route_label="codex",
+        codex_quota_used_percent=70.2,
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+        fields=("route_reasoning",),
+    )
+    assert out == "codex | mini-low | 70%"
+
+
+def test_format_footer_deepseek_route_reasoning_omits_cost_highlight():
+    out = format_runtime_footer(
+        model="deepseek-v4-flash",
+        provider="deepseek",
+        reasoning_effort="low",
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+        fields=("route_reasoning",),
+    )
+    assert out == "deepseek-v4-flash | low"
+
+
+def test_codex_quota_used_percent_from_snapshot_prefers_session_window():
+    snapshot = SimpleNamespace(
+        windows=(
+            SimpleNamespace(label="Weekly", used_percent=12.0),
+            SimpleNamespace(label="Session", used_percent=70.2),
+        )
+    )
+    assert _codex_quota_used_percent_from_snapshot(snapshot) == 70.2
 
 
 # ---------------------------------------------------------------------------

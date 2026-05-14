@@ -8821,10 +8821,6 @@ class AIAgent:
                     provider=self.provider,
                 )
 
-            self._emit_status(
-                f"🔄 Primary model failed — switching to fallback: "
-                f"{fb_model} via {fb_provider}"
-            )
             logging.info(
                 "Fallback activated: %s → %s (%s)",
                 old_model, fb_model, fb_provider,
@@ -13823,7 +13819,7 @@ class AIAgent:
                             base_url=getattr(self, "base_url", None),
                         )
                         if not pool_may_recover:
-                            self._emit_status("⚠️ Rate limited — switching to fallback provider...")
+                            logger.info("Rate limited — switching to fallback provider")
                             if self._try_activate_fallback(reason=classified.reason):
                                 retry_count = 0
                                 compression_attempts = 0

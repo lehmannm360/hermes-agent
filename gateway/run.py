@@ -1895,7 +1895,7 @@ class GatewayRunner:
                 return {"enabled": False}
 
     @staticmethod
-    def _get_codex_quota_state() -> object | None:
+    def _get_codex_quota_state() -> Any:
         """Fetch/cache Codex quota for routing without blocking every turn."""
         try:
             from agent.reasoning_policy import CodexQuotaState
@@ -1905,19 +1905,44 @@ class GatewayRunner:
         cache = getattr(GatewayRunner, "_codex_quota_cache", None)
         if isinstance(cache, dict) and now - float(cache.get("ts", 0.0)) < 60:
             return cache.get("state")
+        used_percent = None
         try:
             from agent.account_usage import fetch_account_usage
+            from gateway.runtime_footer import _codex_quota_used_percent_from_snapshot
 
             snapshot = fetch_account_usage("openai-codex")
+            used_percent = _codex_quota_used_percent_from_snapshot(snapshot)
             state = CodexQuotaState.from_usage_snapshot(snapshot)
         except Exception as exc:
             logger.debug("Codex quota snapshot unavailable for routing: %s", exc)
             state = CodexQuotaState(unavailable=True)
         try:
-            setattr(GatewayRunner, "_codex_quota_cache", {"ts": now, "state": state})
+            setattr(
+                GatewayRunner,
+                "_codex_quota_cache",
+                {"ts": now, "state": state, "used_percent": used_percent},
+            )
         except Exception:
             pass
         return state
+
+    @staticmethod
+    def _get_codex_quota_used_percent() -> Optional[float]:
+        """Return cached Codex 5-hour quota used percentage for footers."""
+        now = time.monotonic()
+        cache = getattr(GatewayRunner, "_codex_quota_cache", None)
+        if not isinstance(cache, dict) or now - float(cache.get("ts", 0.0)) >= 60:
+            GatewayRunner._get_codex_quota_state()
+            cache = getattr(GatewayRunner, "_codex_quota_cache", None)
+        if not isinstance(cache, dict):
+            return None
+        used = cache.get("used_percent")
+        if used is None:
+            return None
+        try:
+            return float(used)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _runtime_dict_from_kwargs(runtime_kwargs: dict) -> dict:
@@ -7804,6 +7829,11 @@ class GatewayRunner:
                     provider=agent_result.get("provider"),
                     reasoning_effort=agent_result.get("reasoning_effort"),
                     route_label=agent_result.get("route_label"),
+                    codex_quota_used_percent=(
+                        self._get_codex_quota_used_percent()
+                        if str(agent_result.get("provider") or "").strip().lower() in {"openai-codex", "codex"}
+                        else None
+                    ),
                 )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
