@@ -8434,20 +8434,18 @@ class GatewayRunner:
             # Persist the response reference ID (in footer) → DB mapping.
             # The ref was generated before the footer was built; now that
             # messages are persisted, we can look up the last assistant
-            # message and create the record.  Best-effort — failures are
+            # message and record the mapping.  Best-effort — failures are
             # logged but never block the turn.
             if _response_ref and self._session_db and response:
                 try:
-                    _row = self._session_db._conn.execute(
-                        "SELECT id FROM messages "
-                        "WHERE session_id = ? AND role = 'assistant' "
-                        "ORDER BY id DESC LIMIT 1",
-                        (session_entry.session_id,),
-                    ).fetchone()
+                    _row = self._session_db.get_last_assistant_message(
+                        session_entry.session_id,
+                    )
                     if _row:
                         self._session_db.create_response_ref(
                             session_id=session_entry.session_id,
                             message_id=_row["id"],
+                            ref_id=_response_ref,
                         )
                 except Exception as _ref_err:
                     logger.debug("response_ref persist failed: %s", _ref_err)

@@ -1534,17 +1534,20 @@ class SessionDB:
         self,
         session_id: str,
         message_id: int,
+        ref_id: str | None = None,
         platform: str | None = None,
         chat_id: str | None = None,
         thread_id: str | None = None,
     ) -> str:
         """Create a short response reference ID for a message and persist it.
 
-        Returns the generated ``ref_id`` (e.g. ``r-8f3a21c4``).
+        If ``ref_id`` is not provided, a unique one is auto-generated.
+        Returns the ``ref_id`` (e.g. ``r-8f3a21c4``).
         References are automatically cascade-deleted when the message or
         session is removed.
         """
-        ref_id = "r-" + secrets.token_hex(4)  # 9-char, e.g. r-8f3a21c4
+        if ref_id is None:
+            ref_id = "r-" + secrets.token_hex(4)
 
         def _do(conn):
             conn.execute(
@@ -1571,6 +1574,17 @@ class SessionDB:
         if row is None:
             return None
         return dict(row)
+
+    def get_last_assistant_message(self, session_id: str) -> dict | None:
+        """Return the most recent assistant message for a session, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, content FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def replace_messages(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """Atomically replace every message for a session.
