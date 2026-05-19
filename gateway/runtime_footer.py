@@ -66,7 +66,7 @@ def resolve_footer_config(
         2. ``display.runtime_footer``
         3. ``display.platforms.<platform_key>.runtime_footer``
     """
-    resolved = {"enabled": False, "fields": list(_DEFAULT_FIELDS)}
+    resolved = {"enabled": False, "fields": list(_DEFAULT_FIELDS), "style": "plain"}
     cfg = (user_config or {}).get("display") or {}
 
     global_cfg = cfg.get("runtime_footer")
@@ -75,6 +75,8 @@ def resolve_footer_config(
             resolved["enabled"] = bool(global_cfg.get("enabled"))
         if isinstance(global_cfg.get("fields"), list) and global_cfg["fields"]:
             resolved["fields"] = [str(f) for f in global_cfg["fields"]]
+        if global_cfg.get("style"):
+            resolved["style"] = str(global_cfg.get("style"))
 
     if platform_key:
         platforms = cfg.get("platforms") or {}
@@ -86,6 +88,8 @@ def resolve_footer_config(
                     resolved["enabled"] = bool(plat_footer.get("enabled"))
                 if isinstance(plat_footer.get("fields"), list) and plat_footer["fields"]:
                     resolved["fields"] = [str(f) for f in plat_footer["fields"]]
+                if plat_footer.get("style"):
+                    resolved["style"] = str(plat_footer.get("style"))
 
     return resolved
 
@@ -173,6 +177,7 @@ def format_runtime_footer(
     reasoning_effort: Optional[str] = None,
     route_label: Optional[str] = None,
     codex_quota_used_percent: Any = None,
+    response_ref: Optional[str] = None,
 ) -> str:
     """Render the footer line, or return "" if no fields have data.
 
@@ -203,11 +208,22 @@ def format_runtime_footer(
             )
             if rr:
                 parts.append(rr)
+        elif field == "response_ref":
+            ref = str(response_ref or "").strip()
+            if ref:
+                parts.append(ref)
         # Unknown field names are silently ignored.
 
     if not parts:
         return ""
     return _SEP.join(parts)
+
+
+def _apply_footer_style(text: str, style: str | None) -> str:
+    """Apply lightweight visual styling using standard markdown syntax."""
+    if not text:
+        return ""
+    return f"*{text}*" if str(style or "").strip().lower() == "italic" else text
 
 
 def build_footer_line(
@@ -222,6 +238,7 @@ def build_footer_line(
     reasoning_effort: Optional[str] = None,
     route_label: Optional[str] = None,
     codex_quota_used_percent: Any = None,
+    response_ref: Optional[str] = None,
 ) -> str:
     """Top-level entry point used by gateway/run.py.
 
@@ -232,7 +249,7 @@ def build_footer_line(
     cfg = resolve_footer_config(user_config, platform_key)
     if not cfg.get("enabled"):
         return ""
-    return format_runtime_footer(
+    line = format_runtime_footer(
         model=model,
         context_tokens=context_tokens,
         context_length=context_length,
@@ -242,4 +259,6 @@ def build_footer_line(
         reasoning_effort=reasoning_effort,
         route_label=route_label,
         codex_quota_used_percent=codex_quota_used_percent,
+        response_ref=response_ref,
     )
+    return _apply_footer_style(line, cfg.get("style"))

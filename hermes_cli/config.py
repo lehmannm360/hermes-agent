@@ -1660,7 +1660,7 @@ DEFAULT_CONFIG = {
         "auto_prune": False,
         # How many days of ended-session history to keep.  Matches the
         # default of ``hermes sessions prune``.
-        "retention_days": 90,
+        "retention_days": 180,
         # VACUUM after a prune that actually deleted rows.  SQLite does not
         # reclaim disk space on DELETE — freed pages are just reused on
         # subsequent INSERTs — so without VACUUM the file stays bloated

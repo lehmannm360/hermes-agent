@@ -206,7 +206,7 @@ def test_codex_quota_used_percent_from_snapshot_prefers_session_window():
 
 def test_resolve_defaults_off_empty_config():
     cfg = resolve_footer_config({}, "telegram")
-    assert cfg == {"enabled": False, "fields": ["model", "context_pct", "cwd"]}
+    assert cfg == {"enabled": False, "fields": ["model", "context_pct", "cwd"], "style": "plain"}
 
 
 def test_resolve_global_enable():
@@ -321,6 +321,31 @@ def test_build_footer_route_reasoning_for_model_reasoning_footnote():
         cwd="",
     )
     assert out == "codex | xhigh"
+
+
+def test_build_footer_response_ref_field_and_italic_style():
+    out = build_footer_line(
+        user_config={
+            "display": {
+                "runtime_footer": {
+                    "enabled": True,
+                    "fields": ["route_reasoning", "response_ref"],
+                    "style": "italic",
+                }
+            }
+        },
+        platform_key="telegram",
+        model="openai/gpt-5.4-mini",
+        provider="openai-codex",
+        reasoning_effort="low",
+        route_label="codex",
+        codex_quota_used_percent=36.6,
+        response_ref="r-8f3a21c4",
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+    )
+    assert out == "*codex | mini-low | 37% · r-8f3a21c4*"
 
 
 def test_build_footer_no_data_returns_empty_even_when_enabled():

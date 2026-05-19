@@ -161,6 +161,29 @@ class TestMessageStorage:
         session = db.get_session("s1")
         assert session["message_count"] == 2
 
+    def test_response_ref_maps_to_assistant_message_and_cascades_on_delete(self, db):
+        db.create_session(session_id="s1", source="telegram")
+        msg_id = db.append_message("s1", role="assistant", content="Original response")
+
+        ref_id = db.create_response_ref(
+            session_id="s1",
+            message_id=msg_id,
+            platform="telegram",
+            chat_id="123",
+            thread_id="456",
+        )
+        assert ref_id.startswith("r-") and len(ref_id) == 10
+
+        ref = db.get_response_ref(ref_id)
+        assert ref is not None
+        assert ref["message_id"] == msg_id
+        assert ref["platform"] == "telegram"
+        assert ref["chat_id"] == "123"
+        assert ref["thread_id"] == "456"
+
+        assert db.delete_session("s1") is True
+        assert db.get_response_ref(ref_id) is None
+
     def test_tool_response_does_not_increment_tool_count(self, db):
         """Tool responses (role=tool) should not increment tool_call_count.
 
@@ -1130,10 +1153,11 @@ class TestPruneSessions:
         # Create and end an "old" session
         db.create_session(session_id="old", source="cli")
         db.end_session("old", end_reason="done")
-        # Manually backdate started_at
+        # Manually backdate started_at and ended_at
+        old_ts = time.time() - 100 * 86400
         db._conn.execute(
-            "UPDATE sessions SET started_at = ? WHERE id = ?",
-            (time.time() - 100 * 86400, "old"),
+            "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?",
+            (old_ts, old_ts, "old"),
         )
         db._conn.commit()
 
@@ -1160,13 +1184,33 @@ class TestPruneSessions:
         assert pruned == 0
         assert db.get_session("active") is not None
 
+    def test_prune_uses_last_activity_not_session_start(self, db):
+        db.create_session(session_id="recently_active", source="cli")
+        db.append_message("recently_active", role="user", content="still relevant")
+        db.end_session("recently_active", end_reason="done")
+        old_ts = time.time() - 200 * 86400
+        recent_ts = time.time() - 10 * 86400
+        db._conn.execute(
+            "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?",
+            (old_ts, old_ts, "recently_active"),
+        )
+        db._conn.execute(
+            "UPDATE messages SET timestamp = ? WHERE session_id = ?",
+            (recent_ts, "recently_active"),
+        )
+        db._conn.commit()
+
+        assert db.prune_sessions(older_than_days=180) == 0
+        assert db.get_session("recently_active") is not None
+
     def test_prune_with_source_filter(self, db):
         for sid, src in [("old_cli", "cli"), ("old_tg", "telegram")]:
             db.create_session(session_id=sid, source=src)
             db.end_session(sid, end_reason="done")
+            old_ts = time.time() - 200 * 86400
             db._conn.execute(
-                "UPDATE sessions SET started_at = ? WHERE id = ?",
-                (time.time() - 200 * 86400, sid),
+                "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?",
+                (old_ts, old_ts, sid),
             )
         db._conn.commit()
 
@@ -1190,10 +1234,14 @@ class TestPruneSessions:
         db.create_session(session_id="D", source="cli", parent_session_id="C")
         db.end_session("D", end_reason="done")
 
-        # Backdate A and B to be old; C and D stay recent
-        for sid, ts in [("A", old_ts), ("B", old_ts), ("C", recent_ts), ("D", recent_ts)]:
+        # Backdate A and B to be old (started + ended); C and D stay recent
+        for sid, ts in [("A", old_ts), ("B", old_ts)]:
             db._conn.execute(
-                "UPDATE sessions SET started_at = ? WHERE id = ?", (ts, sid)
+                "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?", (ts, ts, sid),
+            )
+        for sid, ts in [("C", recent_ts), ("D", recent_ts)]:
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE id = ?", (ts, sid),
             )
         db._conn.commit()
 
@@ -1223,7 +1271,7 @@ class TestPruneSessions:
 
         for sid in ("X", "Y", "Z"):
             db._conn.execute(
-                "UPDATE sessions SET started_at = ? WHERE id = ?", (old_ts, sid)
+                "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?", (old_ts, old_ts, sid)
             )
         db._conn.commit()
 
@@ -2607,9 +2655,10 @@ class TestAutoMaintenance:
         """Create a session that is ended and was started `days_old` days ago."""
         db.create_session(session_id=sid, source="cli")
         db.end_session(sid, end_reason="done")
+        old_ts = time.time() - days_old * 86400
         db._conn.execute(
-            "UPDATE sessions SET started_at = ? WHERE id = ?",
-            (time.time() - days_old * 86400, sid),
+            "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?",
+            (old_ts, old_ts, sid),
         )
         db._conn.commit()
 

@@ -1252,7 +1252,7 @@ class SessionStore:
         """Get the path to a session's legacy transcript file."""
         return self.sessions_dir / f"{session_id}.jsonl"
     
-    def append_to_transcript(self, session_id: str, message: Dict[str, Any], skip_db: bool = False) -> None:
+    def append_to_transcript(self, session_id: str, message: Dict[str, Any], skip_db: bool = False) -> int | None:
         """Append a message to a session's transcript (SQLite + legacy JSONL).
 
         Args:
@@ -1260,11 +1260,16 @@ class SessionStore:
                      Used when the agent already persisted messages to SQLite
                      via its own _flush_messages_to_session_db(), preventing
                      the duplicate-write bug (#860).
+
+        Returns:
+            The SQLite ``message_id`` of the newly inserted row, or None if
+            the DB write was skipped.
         """
+        msg_id: int | None = None
         # Write to SQLite (unless the agent already handled it)
         if self._db and not skip_db:
             try:
-                self._db.append_message(
+                msg_id = self._db.append_message(
                     session_id=session_id,
                     role=message.get("role", "unknown"),
                     content=message.get("content"),
@@ -1290,6 +1295,8 @@ class SessionStore:
             # Disk full / read-only fs / permission errors must not crash the
             # message handler — the SQLite write above is the primary store.
             logger.debug("Failed to write JSONL transcript for %s: %s", session_id, e)
+
+        return msg_id
     
     def rewrite_transcript(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """Replace the entire transcript for a session with new messages.

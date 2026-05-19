@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import sys
 import signal
@@ -8206,8 +8207,10 @@ class GatewayRunner:
             # streaming already delivered the body, we can't mutate the sent
             # text, so we fire a separate trailing send below.
             _footer_line = ""
+            _response_ref: str | None = None
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
+                _response_ref = "r-" + secrets.token_hex(4)
                 _footer_line = _bfl(
                     user_config=_load_gateway_config(),
                     platform_key=_platform_config_key(source.platform),
@@ -8223,6 +8226,7 @@ class GatewayRunner:
                         if str(agent_result.get("provider") or "").strip().lower() in {"openai-codex", "codex"}
                         else None
                     ),
+                    response_ref=_response_ref,
                 )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
@@ -8426,7 +8430,28 @@ class GatewayRunner:
                             session_entry.session_id, entry,
                             skip_db=agent_persisted,
                         )
-            
+
+            # Persist the response reference ID (in footer) → DB mapping.
+            # The ref was generated before the footer was built; now that
+            # messages are persisted, we can look up the last assistant
+            # message and create the record.  Best-effort — failures are
+            # logged but never block the turn.
+            if _response_ref and self._session_db and response:
+                try:
+                    _row = self._session_db._conn.execute(
+                        "SELECT id FROM messages "
+                        "WHERE session_id = ? AND role = 'assistant' "
+                        "ORDER BY id DESC LIMIT 1",
+                        (session_entry.session_id,),
+                    ).fetchone()
+                    if _row:
+                        self._session_db.create_response_ref(
+                            session_id=session_entry.session_id,
+                            message_id=_row["id"],
+                        )
+                except Exception as _ref_err:
+                    logger.debug("response_ref persist failed: %s", _ref_err)
+
             # Token counts and model are now persisted by the agent directly.
             # Keep only last_prompt_tokens here for context-window tracking and
             # compression decisions.
