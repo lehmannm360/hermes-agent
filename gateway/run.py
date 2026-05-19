@@ -2000,12 +2000,21 @@ class GatewayRunner:
             tuple(runtime.get("args") or []),
         )
 
-    def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
+    def _resolve_turn_agent_config(
+        self,
+        user_message: str,
+        model: str,
+        runtime_kwargs: dict,
+        *,
+        reasoning_config: Optional[dict] = None,
+        force_reasoning_config: bool = False,
+    ) -> dict:
         """Build the effective model/runtime config for a single turn.
 
         Applies adaptive reasoning and Codex-first quota-aware routing when
-        ``agent.reasoning_policy.enabled`` is true.  Otherwise preserves the
-        session's primary model/provider exactly as before.
+        ``agent.reasoning_policy.enabled`` is true.  Explicit per-session
+        reasoning overrides (from /reasoning) take precedence and keep the
+        session's selected model/provider stable.
         """
         from hermes_cli.models import resolve_fast_mode_overrides
 
@@ -2017,8 +2026,11 @@ class GatewayRunner:
             "fallback_model": self._fallback_model,
         }
 
+        if force_reasoning_config and reasoning_config:
+            route["reasoning_config"] = dict(reasoning_config)
+
         policy = self._load_reasoning_policy()
-        if bool(policy.get("enabled")):
+        if bool(policy.get("enabled")) and not force_reasoning_config:
             try:
                 from agent.reasoning_policy import (
                     decide_turn_route,
@@ -11042,9 +11054,19 @@ class GatewayRunner:
             pr = self._provider_routing
             max_iterations = int(os.getenv("HERMES_MAX_ITERATIONS", "90"))
             reasoning_config = self._resolve_session_reasoning_config(source=source)
+            has_session_reasoning_override = (
+                self._session_key_for_source(source)
+                in (getattr(self, "_session_reasoning_overrides", {}) or {})
+            )
             self._reasoning_config = reasoning_config
             self._service_tier = self._load_service_tier()
-            turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+            turn_route = self._resolve_turn_agent_config(
+                prompt,
+                model,
+                runtime_kwargs,
+                reasoning_config=reasoning_config,
+                force_reasoning_config=has_session_reasoning_override,
+            )
             effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
             turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
 
@@ -15667,7 +15689,15 @@ class GatewayRunner:
                     log_message="interim_assistant_callback scheduling error",
                 )
 
-            turn_route = self._resolve_turn_agent_config(message, model, runtime_kwargs)
+            turn_route = self._resolve_turn_agent_config(
+                message,
+                model,
+                runtime_kwargs,
+                reasoning_config=reasoning_config,
+                force_reasoning_config=(
+                    session_key in (getattr(self, "_session_reasoning_overrides", {}) or {})
+                ),
+            )
             effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
             turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
 
