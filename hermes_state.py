@@ -18,6 +18,7 @@ import json
 import logging
 import random
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -241,6 +242,16 @@ CREATE TABLE IF NOT EXISTS messages (
     observed INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS response_refs (
+    ref_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    platform TEXT,
+    chat_id TEXT,
+    thread_id TEXT,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -250,6 +261,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_response_refs_message ON response_refs(message_id);
+CREATE INDEX IF NOT EXISTS idx_response_refs_session ON response_refs(session_id);
 """
 
 FTS_SQL = """
@@ -1542,6 +1555,48 @@ class SessionDB:
 
         return self._execute_write(_do)
 
+    def create_response_ref(
+        self,
+        session_id: str,
+        message_id: int,
+        platform: str | None = None,
+        chat_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Create a short response reference ID for a message and persist it.
+
+        Returns the generated ``ref_id`` (e.g. ``r-8f3a21c4``).
+        References are automatically cascade-deleted when the message or
+        session is removed.
+        """
+        ref_id = "r-" + secrets.token_hex(4)  # 9-char, e.g. r-8f3a21c4
+
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO response_refs (ref_id, session_id, message_id,
+                   platform, chat_id, thread_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (ref_id, session_id, message_id, platform, chat_id, thread_id, time.time()),
+            )
+            return ref_id
+
+        return self._execute_write(_do)
+
+    def get_response_ref(self, ref_id: str) -> dict | None:
+        """Look up a response reference by its ``ref_id``.
+
+        Returns a dict with keys ``ref_id``, ``session_id``, ``message_id``,
+        ``platform``, ``chat_id``, ``thread_id``, ``created_at``, or None if
+        not found / pruned.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM response_refs WHERE ref_id = ?", (ref_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
     def replace_messages(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """Atomically replace every message for a session.
 
@@ -2577,11 +2632,14 @@ class SessionDB:
 
     def prune_sessions(
         self,
-        older_than_days: int = 90,
+        older_than_days: int = 180,
         source: str = None,
         sessions_dir: Optional[Path] = None,
     ) -> int:
-        """Delete sessions older than N days. Returns count of deleted sessions.
+        """Delete sessions where last activity is older than N days. Returns count of deleted sessions.
+
+        Uses the maximum of ``started_at``, ``ended_at``, and the latest
+        message timestamp to determine when a session was last active.
 
         Only prunes ended sessions (not active ones).  Child sessions outside
         the prune window are orphaned (parent_session_id set to NULL) rather
@@ -2594,17 +2652,21 @@ class SessionDB:
         removed_ids: list[str] = []
 
         def _do(conn):
+            where_source = "AND source = ?" if source else ""
+            params = [cutoff]
             if source:
-                cursor = conn.execute(
-                    """SELECT id FROM sessions
-                       WHERE started_at < ? AND ended_at IS NOT NULL AND source = ?""",
-                    (cutoff, source),
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT id FROM sessions WHERE started_at < ? AND ended_at IS NOT NULL",
-                    (cutoff,),
-                )
+                params.append(source)
+            cursor = conn.execute(
+                f"""SELECT id FROM sessions
+                    WHERE COALESCE(
+                        (SELECT MAX(timestamp) FROM messages WHERE session_id = sessions.id),
+                        ended_at,
+                        started_at
+                    ) < ?
+                    AND ended_at IS NOT NULL
+                    {where_source}""",
+                params,
+            )
             session_ids = {row["id"] for row in cursor.fetchall()}
 
             if not session_ids:
@@ -3106,7 +3168,7 @@ class SessionDB:
 
     def maybe_auto_prune_and_vacuum(
         self,
-        retention_days: int = 90,
+        retention_days: int = 180,
         min_interval_hours: int = 24,
         vacuum: bool = True,
         sessions_dir: Optional[Path] = None,
