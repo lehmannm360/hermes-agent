@@ -6660,6 +6660,17 @@ class GatewayRunner:
         if self.pairing_store.is_approved(platform_name, user_id):
             return True
 
+        # Check the cross-platform team registry in config.yaml.  This lets one
+        # named member (e.g. `esa`) carry Telegram, WhatsApp, Signal, etc. IDs
+        # plus role/permission metadata without duplicating env allowlists.
+        try:
+            from gateway.message_allowlist import message_allowlist_authorizes
+
+            if message_allowlist_authorizes(source):
+                return True
+        except Exception as exc:
+            logger.warning("Failed to evaluate security.message_allowlist: %s", exc)
+
         # Check platform-specific and global allowlists
         platform_allowlist = os.getenv(platform_env_map.get(source.platform, ""), "").strip()
         group_user_allowlist = ""
@@ -6814,6 +6825,14 @@ class GatewayRunner:
 
         if os.getenv("GATEWAY_ALLOWED_USERS", "").strip():
             return "ignore"
+
+        try:
+            from gateway.message_allowlist import message_allowlist_configured
+
+            if message_allowlist_configured():
+                return "ignore"
+        except Exception:
+            pass
 
         return "pair"
 

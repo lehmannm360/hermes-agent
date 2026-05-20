@@ -140,6 +140,80 @@ def test_star_wildcard_works_for_any_platform(monkeypatch):
     assert runner._is_user_authorized(source) is True
 
 
+def test_security_message_allowlist_authorizes_named_member_across_platforms(monkeypatch, tmp_path):
+    """security.message_allowlist stores team members + platform account IDs."""
+    _clear_auth_env(monkeypatch)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "security:\n"
+        "  message_allowlist:\n"
+        "    enabled: true\n"
+        "    members:\n"
+        "      esa:\n"
+        "        display_name: Esa\n"
+        "        role: owner\n"
+        "        permissions: [owner, chat, reminders, approvals]\n"
+        "        accounts:\n"
+        "          telegram:\n"
+        "            user_ids: ['637486142']\n"
+        "          whatsapp:\n"
+        "            user_ids: ['60123456789@s.whatsapp.net']\n",
+        encoding="utf-8",
+    )
+
+    runner, _adapter = _make_runner(
+        Platform.TELEGRAM,
+        GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="t")}),
+    )
+    telegram_source = SessionSource(
+        platform=Platform.TELEGRAM,
+        user_id="637486142",
+        chat_id="637486142",
+        user_name="Zat",
+        chat_type="dm",
+    )
+    assert runner._is_user_authorized(telegram_source) is True
+
+    whatsapp_source = SessionSource(
+        platform=Platform.WHATSAPP,
+        user_id="60123456789@s.whatsapp.net",
+        chat_id="60123456789@s.whatsapp.net",
+        user_name="Esa",
+        chat_type="dm",
+    )
+    assert runner._is_user_authorized(whatsapp_source) is True
+
+
+def test_security_message_allowlist_ignores_disabled_members(monkeypatch, tmp_path):
+    _clear_auth_env(monkeypatch)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "security:\n"
+        "  message_allowlist:\n"
+        "    enabled: true\n"
+        "    members:\n"
+        "      former_teammate:\n"
+        "        enabled: false\n"
+        "        accounts:\n"
+        "          telegram:\n"
+        "            user_ids: ['111']\n",
+        encoding="utf-8",
+    )
+
+    runner, _adapter = _make_runner(
+        Platform.TELEGRAM,
+        GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="t")}),
+    )
+    source = SessionSource(
+        platform=Platform.TELEGRAM,
+        user_id="111",
+        chat_id="111",
+        user_name="former",
+        chat_type="dm",
+    )
+    assert runner._is_user_authorized(source) is False
+
+
 def test_qq_group_allowlist_authorizes_group_chat_without_user_allowlist(monkeypatch):
     _clear_auth_env(monkeypatch)
     monkeypatch.setenv("QQ_GROUP_ALLOWED_USERS", "group-openid-1")
