@@ -886,10 +886,38 @@ def restore_primary_runtime(agent) -> bool:
         # entirely, stranding the index and silently blocking all future
         # fallback attempts for the session.  Fixes #20465.
         agent._fallback_index = 0
+
+        # If the primary provider is banned (persistent ban registry),
+        # force fallback activation so the agent doesn't waste a turn
+        # trying the banned model.
+        from agent.provider_ban_registry import is_banned as _check_banned
+        _rt = agent._primary_runtime
+        if _rt and _check_banned(_rt.get("provider", ""), _rt.get("model", "")):
+            logging.info(
+                "Primary %s/%s is banned — activating fallback at turn start",
+                _rt.get("provider"), _rt.get("model"),
+            )
+            agent._fallback_activated = True
+            if agent._try_activate_fallback():
+                return True
+            return False
+
         return False
 
     if getattr(agent, "_rate_limited_until", 0) > time.monotonic():
         return False  # primary still in rate-limit cooldown, stay on fallback
+
+    # Check if the primary provider/model is banned in the persistent
+    # cross-session ban registry (set by the stale-timeout detector).
+    from agent.provider_ban_registry import is_banned as _check_banned
+    rt = agent._primary_runtime
+    if rt and _check_banned(rt.get("provider", ""), rt.get("model", "")):
+        logging.info(
+            "Provider %s/%s is banned — staying on fallback (%s)",
+            rt.get("provider"), rt.get("model"),
+            "re-banning will auto-test on expiry",
+        )
+        return False
 
     rt = agent._primary_runtime
     try:

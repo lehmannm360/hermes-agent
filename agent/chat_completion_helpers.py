@@ -384,6 +384,16 @@ def interruptible_api_call(agent, api_kwargs: dict):
             # Wait briefly for the thread to notice the closed connection.
             t.join(timeout=2.0)
             if result["error"] is None and result["response"] is None:
+                # Write a persistent provider ban so this model isn't retried
+                # across sessions for the full ban duration.
+                try:
+                    _stale_model = api_kwargs.get("model", "")
+                    _stale_provider = getattr(agent, "provider", "") or ""
+                    if _stale_model and _stale_provider:
+                        from agent.provider_ban_registry import ban as _ban_provider
+                        _ban_provider(_stale_provider, _stale_model, reason="timeout")
+                except Exception:
+                    pass
                 if _silent_hint:
                     result["error"] = TimeoutError(
                         f"Non-streaming API call timed out after {int(_elapsed)}s "
@@ -2197,6 +2207,19 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         # but delivering no real chunks.  Kill the client so the
         # inner retry loop can start a fresh connection.
         _stale_elapsed = time.time() - last_chunk_time["t"]
+
+        # 90-second internal warming: log and prepare fallback state
+        # before the full stale timeout fires.
+        if _stale_elapsed >= 90.0 and _stale_elapsed < _stream_stale_timeout:
+            if not getattr(agent, "_stream_warming_logged", False):
+                agent._stream_warming_logged = True
+                logger.warning(
+                    "Stream stale for %.0fs (warming threshold 90s). "
+                    "No chunks received yet. model=%s",
+                    _stale_elapsed,
+                    api_kwargs.get("model", "unknown"),
+                )
+
         if _stale_elapsed > _stream_stale_timeout:
             _est_ctx = estimate_request_context_tokens(api_kwargs)
             logger.warning(

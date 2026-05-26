@@ -2093,6 +2093,25 @@ def run_conversation(
                     classified.should_rotate_credential, classified.should_fallback,
                 )
 
+                # ── Persistent provider ban for timeout/transport errors ──
+                # When the model is consistently failing, write a provider ban
+                # so all sessions avoid it for the ban period (default 2h).
+                # Ban only when fallback should be activated — transient errors
+                # (like 429 rate limits) are handled by credential rotation
+                # or brief cooldowns instead.
+                if classified.should_fallback and classified.reason in (
+                    FailoverReason.timeout,
+                ):
+                    try:
+                        from agent.provider_ban_registry import ban as _ban_provider
+                        _ban_provider(
+                            getattr(agent, "provider", "") or "",
+                            getattr(agent, "model", "") or "",
+                            reason=f"{classified.reason.value}:{type(api_error).__name__}",
+                        )
+                    except Exception:
+                        pass
+
                 recovered_with_pool, has_retried_429 = agent._recover_with_credential_pool(
                     status_code=status_code,
                     has_retried_429=has_retried_429,
