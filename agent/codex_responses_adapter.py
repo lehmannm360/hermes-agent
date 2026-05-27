@@ -886,6 +886,36 @@ def _extract_responses_reasoning_text(item: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Safe output_text accessor
+# ---------------------------------------------------------------------------
+
+def _safe_response_output_text(response: Any) -> str:
+    """Safely read the ``output_text`` convenience property from a Responses
+    API response object.
+
+    The OpenAI SDK's ``output_text`` property iterates over ``response.output``
+    internally.  When ``output`` is ``None`` (a known Codex backend failure
+    mode) the property getter raises ``TypeError: 'NoneType' object is not
+    iterable``.  Python's built-in ``getattr(obj, attr, default)`` only
+    suppresses ``AttributeError`` — property-getter exceptions propagate
+    straight through it, so a bare ``getattr(response, "output_text", None)``
+    is **not** safe when ``output`` may be ``None``.
+
+    This helper wraps the access in ``try/except`` so callers get an empty
+    string instead of a crash.
+    """
+    try:
+        text = response.output_text  # type: ignore[attr-defined]
+        return text if isinstance(text, str) else ""
+    except Exception:
+        logger.debug(
+            "output_text access failed during validation "
+            "(response.output is likely None or malformed)"
+        )
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Full response normalization
 # ---------------------------------------------------------------------------
 
@@ -896,8 +926,8 @@ def _normalize_codex_response(response: Any) -> tuple[Any, str]:
         # The Codex backend can return empty output when the answer was
         # delivered entirely via stream events. Check output_text as a
         # last-resort fallback before raising.
-        out_text = getattr(response, "output_text", None)
-        if isinstance(out_text, str) and out_text.strip():
+        out_text = _safe_response_output_text(response)
+        if out_text.strip():
             logger.debug(
                 "Codex response has empty output but output_text is present (%d chars); "
                 "synthesizing output item.", len(out_text.strip()),
@@ -1037,9 +1067,9 @@ def _normalize_codex_response(response: Any) -> tuple[Any, str]:
             ))
 
     final_text = "\n".join([p for p in content_parts if p]).strip()
-    if not final_text and hasattr(response, "output_text"):
-        out_text = getattr(response, "output_text", "")
-        if isinstance(out_text, str):
+    if not final_text:
+        out_text = _safe_response_output_text(response)
+        if out_text:
             final_text = out_text.strip()
 
     # ── Tool-call leak recovery ──────────────────────────────────

@@ -1224,9 +1224,12 @@ def run_conversation(
                                 error_details.append(f"response.status={_codex_resp_status}: {_codex_error_msg}")
                             else:
                                 # output_text fallback: stream backfill may have failed
-                                # but normalize can still recover from output_text
-                                _out_text = getattr(response, "output_text", None)
-                                _out_text_stripped = _out_text.strip() if isinstance(_out_text, str) else ""
+                                # but normalize can still recover from output_text.
+                                # Use the safe accessor — the SDK property raises
+                                # TypeError when response.output is None.
+                                from agent.codex_responses_adapter import _safe_response_output_text as _safe_out_text
+                                _out_text = _safe_out_text(response)
+                                _out_text_stripped = _out_text.strip()
                                 if _out_text_stripped:
                                     logger.debug(
                                         "Codex response.output is empty but output_text is present "
