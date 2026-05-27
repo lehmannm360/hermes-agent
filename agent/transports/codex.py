@@ -108,10 +108,10 @@ class ResponsesApiTransport(ProviderTransport):
                 is_xai_responses=is_xai_responses,
                 replay_encrypted_reasoning=replay_encrypted_reasoning,
             ),
-            "tools": response_tools,
             "store": False,
         }
         if response_tools:
+            kwargs["tools"] = response_tools
             kwargs["tool_choice"] = "auto"
             kwargs["parallel_tool_calls"] = True
 
