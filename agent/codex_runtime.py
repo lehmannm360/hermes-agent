@@ -313,7 +313,12 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 agent._client_log_context(),
                 exc,
             )
-            return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+            try:
+                return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+            except TypeError as _fb_exc:
+                raise RuntimeError(
+                    f"Codex create-stream fallback raised TypeError after transport error: {_fb_exc}"
+                ) from _fb_exc
         except TypeError as exc:
             if _responses_null_output_iterable_error(exc):
                 recovered = _codex_backfilled_response(
@@ -336,7 +341,12 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     "recoverable events; falling back to create(stream=True). %s",
                     agent._client_log_context(),
                 )
-                return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                try:
+                    return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                except TypeError as _fb_exc:
+                    raise RuntimeError(
+                        f"Codex create-stream fallback raised TypeError (output=None recovery): {_fb_exc}"
+                    ) from _fb_exc
             raise
         except RuntimeError as exc:
             err_text = str(exc)
@@ -384,7 +394,12 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     agent._client_log_context(),
                     err_text,
                 )
-                return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                try:
+                    return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                except TypeError as _fb_exc:
+                    raise RuntimeError(
+                        f"Codex create-stream fallback raised TypeError after stream error: {_fb_exc}"
+                    ) from _fb_exc
             raise
 
 
@@ -399,7 +414,14 @@ def run_codex_create_stream_fallback(agent, api_kwargs: dict, client: Any = None
 
     # Compatibility shim for mocks or providers that still return a concrete response.
     if hasattr(stream_or_response, "output"):
-        return stream_or_response
+        _out = getattr(stream_or_response, "output", None)
+        if _out is not None:
+            return stream_or_response
+        # Non-stream response with output=None — cannot recover from this path.
+        raise RuntimeError(
+            "Codex create-stream fallback: responses.create() returned a "
+            "non-stream response with output=None"
+        )
     if not hasattr(stream_or_response, "__iter__"):
         return stream_or_response
 
@@ -408,82 +430,113 @@ def run_codex_create_stream_fallback(agent, api_kwargs: dict, client: Any = None
     collected_text_deltas: list = []
     has_tool_calls = False
     try:
-        for event in stream_or_response:
-            agent._touch_activity("receiving stream response")
-            event_type = getattr(event, "type", None)
-            if not event_type and isinstance(event, dict):
-                event_type = event.get("type")
+        try:
+            for event in stream_or_response:
+                agent._touch_activity("receiving stream response")
+                event_type = getattr(event, "type", None)
+                if not event_type and isinstance(event, dict):
+                    event_type = event.get("type")
 
-            # ``error`` SSE frames carry the provider's real failure
-            # reason (subscription / quota / model-not-available /
-            # rejected-reasoning-replay) but never appear in the
-            # ``{completed, incomplete, failed}`` terminal set, so the
-            # raw loop below would silently consume them and end with
-            # "did not emit a terminal response".  xAI in particular
-            # emits ``type=error`` as the FIRST frame for OAuth
-            # accounts whose Grok subscription is missing/exhausted —
-            # the SDK's stream helper raises ``RuntimeError(Expected
-            # to have received response.created before error)`` which
-            # the caller catches and routes here, expecting this
-            # fallback to surface the message.  Synthesize an
-            # APIError-shaped exception so ``_summarize_api_error``
-            # and the credential-pool entitlement detector see the
-            # real text instead of a generic RuntimeError.
-            if event_type == "error":
-                err_message = getattr(event, "message", None)
-                if not err_message and isinstance(event, dict):
-                    err_message = event.get("message")
-                err_code = getattr(event, "code", None)
-                if not err_code and isinstance(event, dict):
-                    err_code = event.get("code")
-                err_param = getattr(event, "param", None)
-                if not err_param and isinstance(event, dict):
-                    err_param = event.get("param")
-                err_message = (err_message or "stream emitted error event").strip()
-                from run_agent import _StreamErrorEvent
-                raise _StreamErrorEvent(err_message, code=err_code, param=err_param)
+                # ``error`` SSE frames carry the provider's real failure
+                # reason (subscription / quota / model-not-available /
+                # rejected-reasoning-replay) but never appear in the
+                # ``{completed, incomplete, failed}`` terminal set, so the
+                # raw loop below would silently consume them and end with
+                # "did not emit a terminal response".  xAI in particular
+                # emits ``type=error`` as the FIRST frame for OAuth
+                # accounts whose Grok subscription is missing/exhausted —
+                # the SDK's stream helper raises ``RuntimeError(Expected
+                # to have received response.created before error)`` which
+                # the caller catches and routes here, expecting this
+                # fallback to surface the message.  Synthesize an
+                # APIError-shaped exception so ``_summarize_api_error``
+                # and the credential-pool entitlement detector see the
+                # real text instead of a generic RuntimeError.
+                if event_type == "error":
+                    err_message = getattr(event, "message", None)
+                    if not err_message and isinstance(event, dict):
+                        err_message = event.get("message")
+                    err_code = getattr(event, "code", None)
+                    if not err_code and isinstance(event, dict):
+                        err_code = event.get("code")
+                    err_param = getattr(event, "param", None)
+                    if not err_param and isinstance(event, dict):
+                        err_param = event.get("param")
+                    err_message = (err_message or "stream emitted error event").strip()
+                    from run_agent import _StreamErrorEvent
+                    raise _StreamErrorEvent(err_message, code=err_code, param=err_param)
 
-            # Collect output items and text deltas for backfill
-            if event_type == "response.output_item.done":
-                done_item = getattr(event, "item", None)
-                if done_item is None and isinstance(event, dict):
-                    done_item = event.get("item")
-                if done_item is not None:
-                    collected_output_items.append(done_item)
-            elif event_type in {"response.output_text.delta",}:
-                delta = getattr(event, "delta", "")
-                if not delta and isinstance(event, dict):
-                    delta = event.get("delta", "")
-                if delta:
-                    collected_text_deltas.append(delta)
-            elif event_type and "function_call" in event_type:
-                has_tool_calls = True
+                # Collect output items and text deltas for backfill
+                if event_type == "response.output_item.done":
+                    done_item = getattr(event, "item", None)
+                    if done_item is None and isinstance(event, dict):
+                        done_item = event.get("item")
+                    if done_item is not None:
+                        collected_output_items.append(done_item)
+                elif event_type in {"response.output_text.delta",}:
+                    delta = getattr(event, "delta", "")
+                    if not delta and isinstance(event, dict):
+                        delta = event.get("delta", "")
+                    if delta:
+                        collected_text_deltas.append(delta)
+                elif event_type and "function_call" in event_type:
+                    has_tool_calls = True
 
-            if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
-                continue
+                if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
+                    continue
 
-            terminal_response = getattr(event, "response", None)
-            if terminal_response is None and isinstance(event, dict):
-                terminal_response = event.get("response")
-            if terminal_response is not None:
-                # Backfill empty output from collected stream events
-                _out = getattr(terminal_response, "output", None)
-                if _out is None or (isinstance(_out, list) and not _out):
-                    recovered = _codex_backfilled_response(
-                        collected_output_items,
-                        collected_text_deltas,
-                        has_tool_calls=has_tool_calls,
-                        model=fallback_kwargs.get("model"),
-                    )
-                    if recovered is not None:
-                        terminal_response.output = recovered.output
-                        logger.debug(
-                            "Codex fallback stream: backfilled missing output "
-                            "(items=%d, text_parts=%d)",
-                            len(collected_output_items),
-                            len(collected_text_deltas),
+                terminal_response = getattr(event, "response", None)
+                if terminal_response is None and isinstance(event, dict):
+                    terminal_response = event.get("response")
+                if terminal_response is not None:
+                    # Backfill empty output from collected stream events
+                    _out = getattr(terminal_response, "output", None)
+                    if _out is None or (isinstance(_out, list) and not _out):
+                        recovered = _codex_backfilled_response(
+                            collected_output_items,
+                            collected_text_deltas,
+                            has_tool_calls=has_tool_calls,
+                            model=fallback_kwargs.get("model"),
                         )
-                return terminal_response
+                        if recovered is not None:
+                            terminal_response.output = recovered.output
+                            logger.debug(
+                                "Codex fallback stream: backfilled missing output "
+                                "(items=%d, text_parts=%d)",
+                                len(collected_output_items),
+                                len(collected_text_deltas),
+                            )
+                        else:
+                            raise RuntimeError(
+                                "Codex create-stream fallback: terminal response has "
+                                "empty output and no recoverable stream events"
+                            )
+                    return terminal_response
+        except TypeError as exc:
+            if _responses_null_output_iterable_error(exc):
+                # The OpenAI SDK tripped on response.output=None while parsing
+                # an event. Attempt recovery from events we already collected.
+                recovered = _codex_backfilled_response(
+                    collected_output_items,
+                    collected_text_deltas,
+                    has_tool_calls=has_tool_calls,
+                    model=fallback_kwargs.get("model"),
+                )
+                if recovered is not None:
+                    logger.debug(
+                        "Codex create-stream fallback: recovered from stream TypeError "
+                        "(items=%d, text_parts=%d)",
+                        len(collected_output_items),
+                        len(collected_text_deltas),
+                    )
+                    terminal_response = recovered
+                else:
+                    raise RuntimeError(
+                        "Codex create-stream fallback: stream TypeError (output=None) "
+                        f"with no recoverable events: {exc}"
+                    ) from exc
+            else:
+                raise
     finally:
         close_fn = getattr(stream_or_response, "close", None)
         if callable(close_fn):
