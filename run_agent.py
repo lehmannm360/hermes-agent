@@ -6914,7 +6914,7 @@ class AIAgent:
                     # but get_final_response() can return an empty output list.
                     # Backfill from collected items or synthesize from deltas.
                     _out = getattr(final_response, "output", None)
-                    if isinstance(_out, list) and not _out:
+                    if _out is None or (isinstance(_out, list) and not _out):
                         if collected_output_items:
                             final_response.output = list(collected_output_items)
                             logger.debug(
@@ -6949,7 +6949,58 @@ class AIAgent:
                     self._client_log_context(),
                     exc,
                 )
-                return self._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                try:
+                    return self._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                except TypeError as _fb_exc:
+                    raise RuntimeError(
+                        f"Codex create-stream fallback raised TypeError after transport error: {_fb_exc}"
+                    ) from _fb_exc
+            except TypeError as exc:
+                _text = str(exc)
+                if isinstance(exc, TypeError) and "NoneType" in _text and "not iterable" in _text:
+                    # The OpenAI SDK tripped on response.output=None inside
+                    # get_final_response(). Attempt recovery from streamed events.
+                    if collected_output_items:
+                        from types import SimpleNamespace as _SN
+                        _recovered = _SN(
+                            output=list(collected_output_items),
+                            usage=None, status="completed",
+                            model=api_kwargs.get("model"),
+                        )
+                    elif self._codex_streamed_text_parts and not has_tool_calls:
+                        _assembled = "".join(self._codex_streamed_text_parts)
+                        from types import SimpleNamespace as _SN
+                        _recovered = _SN(
+                            output=[_SN(
+                                type="message", role="assistant", status="completed",
+                                content=[_SN(type="output_text", text=_assembled)],
+                            )],
+                            usage=None, status="completed",
+                            model=api_kwargs.get("model"),
+                        )
+                    else:
+                        _recovered = None
+                    if _recovered is not None:
+                        logger.debug(
+                            "Codex stream: recovered from response.output=None via streamed events "
+                            "(items=%d, text_parts=%d). %s",
+                            len(collected_output_items),
+                            len(self._codex_streamed_text_parts),
+                            self._client_log_context(),
+                        )
+                        return _recovered
+                    logger.debug(
+                        "Codex stream: response.output=None with no recoverable events; "
+                        "falling back to create(stream=True). %s",
+                        self._client_log_context(),
+                    )
+                    try:
+                        return self._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                    except TypeError as _fb_exc:
+                        raise RuntimeError(
+                            f"Codex create-stream fallback raised TypeError (output=None recovery): {_fb_exc}"
+                        ) from _fb_exc
+                raise
             except RuntimeError as exc:
                 err_text = str(exc)
                 missing_completed = "response.completed" in err_text
@@ -6966,7 +7017,12 @@ class AIAgent:
                         "Responses stream did not emit response.completed; falling back to create(stream=True). %s",
                         self._client_log_context(),
                     )
-                    return self._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                    try:
+                        return self._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+                    except TypeError as _fb_exc:
+                        raise RuntimeError(
+                            f"Codex create-stream fallback raised TypeError after stream error: {_fb_exc}"
+                        ) from _fb_exc
                 raise
 
     def _run_codex_create_stream_fallback(self, api_kwargs: dict, client: Any = None):
@@ -6979,7 +7035,14 @@ class AIAgent:
 
         # Compatibility shim for mocks or providers that still return a concrete response.
         if hasattr(stream_or_response, "output"):
-            return stream_or_response
+            _out = getattr(stream_or_response, "output", None)
+            if _out is not None:
+                return stream_or_response
+            # Non-stream response with output=None — cannot recover from this path.
+            raise RuntimeError(
+                "Codex create-stream fallback: responses.create() returned a "
+                "non-stream response with output=None"
+            )
         if not hasattr(stream_or_response, "__iter__"):
             return stream_or_response
 
@@ -6987,54 +7050,96 @@ class AIAgent:
         collected_output_items: list = []
         collected_text_deltas: list = []
         try:
-            for event in stream_or_response:
-                self._touch_activity("receiving stream response")
-                event_type = getattr(event, "type", None)
-                if not event_type and isinstance(event, dict):
-                    event_type = event.get("type")
+            try:
+                for event in stream_or_response:
+                    self._touch_activity("receiving stream response")
+                    event_type = getattr(event, "type", None)
+                    if not event_type and isinstance(event, dict):
+                        event_type = event.get("type")
 
-                # Collect output items and text deltas for backfill
-                if event_type == "response.output_item.done":
-                    done_item = getattr(event, "item", None)
-                    if done_item is None and isinstance(event, dict):
-                        done_item = event.get("item")
-                    if done_item is not None:
-                        collected_output_items.append(done_item)
-                elif event_type in {"response.output_text.delta",}:
-                    delta = getattr(event, "delta", "")
-                    if not delta and isinstance(event, dict):
-                        delta = event.get("delta", "")
-                    if delta:
-                        collected_text_deltas.append(delta)
+                    # Collect output items and text deltas for backfill
+                    if event_type == "response.output_item.done":
+                        done_item = getattr(event, "item", None)
+                        if done_item is None and isinstance(event, dict):
+                            done_item = event.get("item")
+                        if done_item is not None:
+                            collected_output_items.append(done_item)
+                    elif event_type in {"response.output_text.delta",}:
+                        delta = getattr(event, "delta", "")
+                        if not delta and isinstance(event, dict):
+                            delta = event.get("delta", "")
+                        if delta:
+                            collected_text_deltas.append(delta)
 
-                if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
-                    continue
+                    if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
+                        continue
 
-                terminal_response = getattr(event, "response", None)
-                if terminal_response is None and isinstance(event, dict):
-                    terminal_response = event.get("response")
-                if terminal_response is not None:
-                    # Backfill empty output from collected stream events
-                    _out = getattr(terminal_response, "output", None)
-                    if isinstance(_out, list) and not _out:
-                        if collected_output_items:
-                            terminal_response.output = list(collected_output_items)
-                            logger.debug(
-                                "Codex fallback stream: backfilled %d output items",
-                                len(collected_output_items),
-                            )
-                        elif collected_text_deltas:
-                            assembled = "".join(collected_text_deltas)
-                            terminal_response.output = [SimpleNamespace(
-                                type="message", role="assistant",
-                                status="completed",
+                    terminal_response = getattr(event, "response", None)
+                    if terminal_response is None and isinstance(event, dict):
+                        terminal_response = event.get("response")
+                    if terminal_response is not None:
+                        # Backfill empty output from collected stream events
+                        _out = getattr(terminal_response, "output", None)
+                        if _out is None or (isinstance(_out, list) and not _out):
+                            if collected_output_items:
+                                terminal_response.output = list(collected_output_items)
+                                logger.debug(
+                                    "Codex fallback stream: backfilled %d output items",
+                                    len(collected_output_items),
+                                )
+                            elif collected_text_deltas:
+                                assembled = "".join(collected_text_deltas)
+                                terminal_response.output = [SimpleNamespace(
+                                    type="message", role="assistant",
+                                    status="completed",
+                                    content=[SimpleNamespace(type="output_text", text=assembled)],
+                                )]
+                                logger.debug(
+                                    "Codex fallback stream: synthesized from %d deltas (%d chars)",
+                                    len(collected_text_deltas), len(assembled),
+                                )
+                            else:
+                                raise RuntimeError(
+                                    "Codex create-stream fallback: terminal response has "
+                                    "empty output and no recoverable stream events"
+                                )
+                        return terminal_response
+            except TypeError as exc:
+                _text = str(exc)
+                if isinstance(exc, TypeError) and "NoneType" in _text and "not iterable" in _text:
+                    # SDK tripped on response.output=None during event parsing.
+                    # Attempt recovery from events already collected.
+                    if collected_output_items:
+                        terminal_response = SimpleNamespace(
+                            output=list(collected_output_items),
+                            usage=None, status="completed",
+                            model=fallback_kwargs.get("model"),
+                        )
+                        logger.debug(
+                            "Codex create-stream fallback: recovered from stream TypeError "
+                            "(%d output items)", len(collected_output_items),
+                        )
+                    elif collected_text_deltas:
+                        assembled = "".join(collected_text_deltas)
+                        terminal_response = SimpleNamespace(
+                            output=[SimpleNamespace(
+                                type="message", role="assistant", status="completed",
                                 content=[SimpleNamespace(type="output_text", text=assembled)],
-                            )]
-                            logger.debug(
-                                "Codex fallback stream: synthesized from %d deltas (%d chars)",
-                                len(collected_text_deltas), len(assembled),
-                            )
-                    return terminal_response
+                            )],
+                            usage=None, status="completed",
+                            model=fallback_kwargs.get("model"),
+                        )
+                        logger.debug(
+                            "Codex create-stream fallback: recovered from stream TypeError "
+                            "(%d text deltas)", len(collected_text_deltas),
+                        )
+                    else:
+                        raise RuntimeError(
+                            "Codex create-stream fallback: stream TypeError (output=None) "
+                            f"with no recoverable events: {exc}"
+                        ) from exc
+                else:
+                    raise
         finally:
             close_fn = getattr(stream_or_response, "close", None)
             if callable(close_fn):
