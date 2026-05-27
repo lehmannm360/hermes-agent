@@ -224,6 +224,12 @@ def _do_test_call(provider: str, model: str) -> None:
     Uses a very short timeout.  If we get any response, the model is
     considered recovered.  If we get a timeout or connection error,
     the ban is refreshed.
+
+    For ``openai-codex`` providers the Codex backend only exposes the
+    Responses API (``/responses``), not Chat Completions
+    (``/chat/completions``).  Calling the wrong endpoint would cause
+    every background test to fail, making the ban permanent.  We
+    detect codex providers and branch accordingly.
     """
     try:
         from hermes_cli.timeouts import get_provider_request_timeout
@@ -235,7 +241,7 @@ def _do_test_call(provider: str, model: str) -> None:
     test_timeout = min(get_provider_request_timeout(provider, model) or 30.0, 30.0)
 
     try:
-        # Use a simple head-request style call — ask for a minimal chat completion
+        # Use a simple head-request style call — ask for a minimal response
         from agent.auxiliary_client import resolve_provider_client
         client, resolved_model = resolve_provider_client(
             provider, model=model, raw_codex=True,
@@ -246,14 +252,33 @@ def _do_test_call(provider: str, model: str) -> None:
 
         import httpx
 
-        # Quick ping — tiny messages list, minimal tokens
-        resp = client.chat.completions.create(
-            model=resolved_model,
-            messages=[{"role": "user", "content": "Say 'ok'"}],
-            max_tokens=5,
-            timeout=httpx.Timeout(connect=10.0, read=test_timeout, write=10.0, pool=10.0),
-        )
-        if resp and resp.choices and resp.choices[0].message:
+        # openai-codex uses the Responses API, not Chat Completions.
+        # Using chat.completions.create() against the Codex backend returns
+        # a 404/error, causing the test to always fail and the ban to become
+        # permanent.  Detect codex providers and use the correct API.
+        is_codex = (provider or "").strip().lower() in {"openai-codex", "codex"}
+
+        if is_codex:
+            # Responses API: input= (list), max_output_tokens=, resp.output
+            resp = client.responses.create(
+                model=resolved_model,
+                input=[{"role": "user", "content": "Say 'ok'"}],
+                max_output_tokens=5,
+                store=False,
+                timeout=httpx.Timeout(connect=10.0, read=test_timeout, write=10.0, pool=10.0),
+            )
+            recovered = bool(resp and getattr(resp, "output", None))
+        else:
+            # Standard Chat Completions API
+            resp = client.chat.completions.create(
+                model=resolved_model,
+                messages=[{"role": "user", "content": "Say 'ok'"}],
+                max_tokens=5,
+                timeout=httpx.Timeout(connect=10.0, read=test_timeout, write=10.0, pool=10.0),
+            )
+            recovered = bool(resp and resp.choices and resp.choices[0].message)
+
+        if recovered:
             logger.info(
                 "Ban expiry test PASSED for %s/%s — unbanning",
                 provider, model,
