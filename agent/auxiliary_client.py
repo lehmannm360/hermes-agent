@@ -1021,6 +1021,11 @@ class _AnthropicCompletionsAdapter:
         model = kwargs.get("model", self._model)
         tools = kwargs.get("tools")
         tool_choice = kwargs.get("tool_choice")
+        # Honour an explicit timeout (e.g. the 30s cap used by the ban-expiry
+        # test call in provider_ban_registry._do_test_call).  Without this the
+        # Anthropic SDK falls back to its own default (600 s), meaning a hung
+        # background test thread could block for 10 minutes instead of 30 s.
+        timeout = kwargs.get("timeout")
         # ZAI's Anthropic-compatible endpoint rejects max_tokens on vision
         # models (glm-4v-flash etc.) with error code 1210.  When the caller
         # signals this by setting _skip_zai_max_tokens in kwargs, omit it.
@@ -1058,6 +1063,8 @@ class _AnthropicCompletionsAdapter:
             if not _forbids_sampling_params(model):
                 anthropic_kwargs["temperature"] = temperature
 
+        if timeout is not None:
+            anthropic_kwargs["timeout"] = timeout
         response = self._client.messages.create(**anthropic_kwargs)
         _transport = get_transport("anthropic_messages")
         _nr = _transport.normalize_response(
