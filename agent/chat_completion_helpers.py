@@ -404,16 +404,6 @@ def interruptible_api_call(agent, api_kwargs: dict):
             # Wait briefly for the thread to notice the closed connection.
             t.join(timeout=2.0)
             if result["error"] is None and result["response"] is None:
-                # Write a persistent provider ban so this model isn't retried
-                # across sessions for the full ban duration.
-                try:
-                    _stale_model = api_kwargs.get("model", "")
-                    _stale_provider = getattr(agent, "provider", "") or ""
-                    if _stale_model and _stale_provider:
-                        from agent.provider_ban_registry import ban as _ban_provider
-                        _ban_provider(_stale_provider, _stale_model, reason="timeout")
-                except Exception:
-                    pass
                 if _silent_hint:
                     result["error"] = TimeoutError(
                         f"Non-streaming API call timed out after {int(_elapsed)}s "

@@ -964,8 +964,7 @@ class _AnthropicCompletionsAdapter:
         model = kwargs.get("model", self._model)
         tools = kwargs.get("tools")
         tool_choice = kwargs.get("tool_choice")
-        # Honour an explicit timeout (e.g. the 30s cap used by the ban-expiry
-        # test call in provider_ban_registry._do_test_call).  Without this the
+        # Honour an explicit timeout.  Without this the
         # Anthropic SDK falls back to its own default (600 s), meaning a hung
         # background test thread could block for 10 minutes instead of 30 s.
         timeout = kwargs.get("timeout")

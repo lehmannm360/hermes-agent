@@ -9126,6 +9126,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _install_psutil_android_compat(pip_cmd)
             _install_python_dependencies_with_optional_fallback(pip_cmd, group=install_group)
 
+        print("→ Applying local SDK compatibility patches...")
+        try:
+            from hermes_cli.sdk_patches import apply_local_sdk_patches
+
+            apply_local_sdk_patches()
+        except Exception as e:
+            logger.debug("Local SDK compatibility patches failed: %s", e)
+            print(f"  ⚠ Local SDK compatibility patches skipped ({e})")
+
         _refresh_active_lazy_features()
 
         _update_node_dependencies()

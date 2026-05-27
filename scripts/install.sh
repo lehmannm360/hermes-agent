@@ -1257,6 +1257,29 @@ PY
     log_success "All dependencies installed"
 }
 
+apply_local_sdk_patches() {
+    local patch_python=""
+    if [ "$USE_VENV" = true ] && [ -n "${INSTALL_DIR:-}" ] && [ -x "$INSTALL_DIR/venv/bin/python" ]; then
+        patch_python="$INSTALL_DIR/venv/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        patch_python="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        patch_python="$(command -v python)"
+    fi
+
+    if [ -z "$patch_python" ]; then
+        log_warn "Local SDK compatibility patches skipped (Python not found)"
+        return 0
+    fi
+
+    log_info "Applying local SDK compatibility patches..."
+    if "$patch_python" -m hermes_cli.sdk_patches; then
+        return 0
+    fi
+
+    log_warn "Local SDK compatibility patches skipped"
+}
+
 setup_path() {
     log_info "Setting up hermes command..."
 
@@ -2017,6 +2040,7 @@ postinstall_mode() {
     check_node
     check_network_prerequisites
     install_system_packages
+    apply_local_sdk_patches
 
     if [ "$HAS_NODE" = true ] && [ "$SKIP_BROWSER" = false ]; then
         ensure_browser
@@ -2051,6 +2075,7 @@ main() {
     clone_repo
     setup_venv
     install_deps
+    apply_local_sdk_patches
     install_node_deps
     setup_path
     copy_config_templates
