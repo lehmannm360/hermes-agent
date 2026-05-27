@@ -124,11 +124,27 @@ def _resolve_codex_usage_url(base_url: str) -> str:
     return normalized + "/api/codex/usage"
 
 
+def _read_codex_account_id_best_effort() -> Optional[str]:
+    """Return the singleton Codex account id when available.
+
+    Pool-only Codex installs are valid: ``resolve_codex_runtime_credentials`` can
+    supply a usable access token from ``credential_pool.openai-codex`` even when
+    the legacy singleton token block is absent.  Account-id routing is only an
+    optional header for the usage endpoint, so missing singleton tokens must not
+    make the whole usage snapshot unavailable.
+    """
+    try:
+        token_data = _read_codex_tokens()
+        tokens = token_data.get("tokens") or {}
+        account_id = str(tokens.get("account_id", "") or "").strip()
+        return account_id or None
+    except Exception:
+        return None
+
+
 def _fetch_codex_account_usage() -> Optional[AccountUsageSnapshot]:
     creds = resolve_codex_runtime_credentials(refresh_if_expiring=True)
-    token_data = _read_codex_tokens()
-    tokens = token_data.get("tokens") or {}
-    account_id = str(tokens.get("account_id", "") or "").strip() or None
+    account_id = _read_codex_account_id_best_effort()
     headers = {
         "Authorization": f"Bearer {creds['api_key']}",
         "Accept": "application/json",

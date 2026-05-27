@@ -95,6 +95,44 @@ def test_fetch_account_usage_codex(monkeypatch):
     assert "Credits balance: $12.50" in snapshot.details
 
 
+def test_fetch_account_usage_codex_allows_pool_only_without_singleton_account_id(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "agent.account_usage.resolve_codex_runtime_credentials",
+        lambda refresh_if_expiring=True: {
+            "provider": "openai-codex",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "api_key": "pool-access-token",
+            "source": "credential_pool",
+        },
+    )
+
+    def _missing_singleton_tokens():
+        raise RuntimeError("No Codex credentials stored")
+
+    class _CapturingClient(_Client):
+        def get(self, url, headers=None):
+            captured["headers"] = dict(headers or {})
+            return super().get(url, headers=headers)
+
+    monkeypatch.setattr("agent.account_usage._read_codex_tokens", _missing_singleton_tokens)
+    monkeypatch.setattr(
+        "agent.account_usage.httpx.Client",
+        lambda timeout=15.0: _CapturingClient(
+            {
+                "plan_type": "plus",
+                "rate_limit": {"primary_window": {"used_percent": 10}},
+            }
+        ),
+    )
+
+    snapshot = fetch_account_usage("openai-codex")
+
+    assert snapshot is not None
+    assert snapshot.windows[0].used_percent == 10.0
+    assert "ChatGPT-Account-Id" not in captured["headers"]
+
+
 def test_render_account_usage_lines_includes_reset_and_provider():
     snapshot = AccountUsageSnapshot(
         provider="openai-codex",
