@@ -3159,6 +3159,24 @@ def _guard_official_docker_root_gateway() -> None:
     sys.exit(1)
 
 
+def _apply_gateway_startup_sdk_patches() -> None:
+    """Reapply local third-party SDK patches for this gateway interpreter.
+
+    The patcher is intentionally idempotent. Running it at gateway boot covers
+    service restarts, profile gateways, and environments where dependencies were
+    refreshed without going through the Hermes install/update wrappers.
+    """
+    try:
+        from hermes_cli.sdk_patches import apply_local_sdk_patches
+
+        apply_local_sdk_patches(quiet=True)
+    except Exception:
+        # Best-effort only: a broken patcher should not prevent the gateway from
+        # starting. The Codex call path will surface the original SDK issue if
+        # the guard could not be applied.
+        pass
+
+
 def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False):
     """Run the gateway in foreground.
     
@@ -3171,6 +3189,7 @@ def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False):
     """
     _guard_official_docker_root_gateway()
     sys.path.insert(0, str(PROJECT_ROOT))
+    _apply_gateway_startup_sdk_patches()
 
     # Detached Windows gateway runs must ignore console-control broadcasts
     # from sibling CLI processes, but foreground `hermes gateway run` still
