@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import math
 import os
-from pathlib import Path
 from typing import Any, Iterable, Optional
 
 _DEFAULT_FIELDS: tuple[str, ...] = ("model", "context_pct", "cwd")

@@ -267,17 +267,6 @@ else
 fi
 
 # ============================================================================
-# Local SDK compatibility patches
-# ============================================================================
-
-echo -e "${CYAN}→${NC} Applying local SDK compatibility patches..."
-if "$SETUP_PYTHON" -m hermes_cli.sdk_patches; then
-    true
-else
-    echo -e "${YELLOW}⚠${NC} Local SDK compatibility patches skipped"
-fi
-
-# ============================================================================
 # Optional: ripgrep (for faster file search)
 # ============================================================================
 

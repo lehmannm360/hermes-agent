@@ -2,7 +2,6 @@
 
 import sys
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch, call
 
 import pytest
 
@@ -28,7 +27,6 @@ def _install_fake_gateway_run(monkeypatch, start_gateway):
     monkeypatch.setattr(
         gateway, "refresh_systemd_unit_if_needed", lambda system=False: False
     )
-    monkeypatch.setattr(gateway, "_apply_gateway_startup_sdk_patches", lambda: None)
 
 
 def test_run_gateway_exits_cleanly_on_keyboard_interrupt(monkeypatch, capsys):
@@ -50,32 +48,6 @@ def test_run_gateway_exits_cleanly_on_keyboard_interrupt(monkeypatch, capsys):
     assert calls == [(False, 0)]
     assert "Press Ctrl+C to stop" in out
     assert "Gateway stopped." in out
-
-
-def test_run_gateway_applies_local_sdk_patches_on_startup(monkeypatch):
-    calls = []
-
-    def fake_start_gateway(*, replace, verbosity):
-        calls.append(("start", replace, verbosity))
-        return object()
-
-    module = ModuleType("gateway.run")
-    setattr(module, "start_gateway", fake_start_gateway)
-    monkeypatch.setitem(sys.modules, "gateway.run", module)
-    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
-    monkeypatch.setattr(
-        gateway, "refresh_systemd_unit_if_needed", lambda system=False: False
-    )
-    monkeypatch.setattr(
-        gateway,
-        "_apply_gateway_startup_sdk_patches",
-        lambda: calls.append(("patch",)),
-    )
-    monkeypatch.setattr(gateway.asyncio, "run", lambda coro: True)
-
-    gateway.run_gateway(verbose=1, replace=True)
-
-    assert calls == [("patch",), ("start", True, 1)]
 
 
 def test_run_gateway_exits_nonzero_when_start_gateway_reports_failure(monkeypatch):
