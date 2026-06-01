@@ -124,11 +124,19 @@ def _resolve_codex_usage_url(base_url: str) -> str:
     return normalized + "/api/codex/usage"
 
 
+def _read_codex_account_id_best_effort() -> Optional[str]:
+    try:
+        token_data = _read_codex_tokens()
+        tokens = token_data.get("tokens") or {}
+        account_id = str(tokens.get("account_id", "") or "").strip()
+        return account_id or None
+    except Exception:
+        return None
+
+
 def _fetch_codex_account_usage() -> Optional[AccountUsageSnapshot]:
     creds = resolve_codex_runtime_credentials(refresh_if_expiring=True)
-    token_data = _read_codex_tokens()
-    tokens = token_data.get("tokens") or {}
-    account_id = str(tokens.get("account_id", "") or "").strip() or None
+    account_id = _read_codex_account_id_best_effort()
     headers = {
         "Authorization": f"Bearer {creds['api_key']}",
         "Accept": "application/json",
@@ -147,13 +155,7 @@ def _fetch_codex_account_usage() -> Optional[AccountUsageSnapshot]:
         used = window.get("used_percent")
         if used is None:
             continue
-        windows.append(
-            AccountUsageWindow(
-                label=label,
-                used_percent=float(used),
-                reset_at=_parse_dt(window.get("reset_at")),
-            )
-        )
+        windows.append(AccountUsageWindow(label=label, used_percent=float(used), reset_at=_parse_dt(window.get("reset_at"))))
     details: list[str] = []
     credits = payload.get("credits") or {}
     if credits.get("has_credits"):
@@ -162,14 +164,7 @@ def _fetch_codex_account_usage() -> Optional[AccountUsageSnapshot]:
             details.append(f"Credits balance: ${float(balance):.2f}")
         elif credits.get("unlimited"):
             details.append("Credits balance: unlimited")
-    return AccountUsageSnapshot(
-        provider="openai-codex",
-        source="usage_api",
-        fetched_at=_utc_now(),
-        plan=_title_case_slug(payload.get("plan_type")),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
+    return AccountUsageSnapshot(provider="openai-codex", source="usage_api", fetched_at=_utc_now(), plan=_title_case_slug(payload.get("plan_type")), windows=tuple(windows), details=tuple(details))
 
 
 def _fetch_anthropic_account_usage() -> Optional[AccountUsageSnapshot]:
@@ -177,43 +172,21 @@ def _fetch_anthropic_account_usage() -> Optional[AccountUsageSnapshot]:
     if not token:
         return None
     if not _is_oauth_token(token):
-        return AccountUsageSnapshot(
-            provider="anthropic",
-            source="oauth_usage_api",
-            fetched_at=_utc_now(),
-            unavailable_reason="Anthropic account limits are only available for OAuth-backed Claude accounts.",
-        )
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.0",
-    }
+        return AccountUsageSnapshot(provider="anthropic", source="oauth_usage_api", fetched_at=_utc_now(), unavailable_reason="Anthropic account limits are only available for OAuth-backed Claude accounts.")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json", "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0"}
     with httpx.Client(timeout=15.0) as client:
         response = client.get("https://api.anthropic.com/api/oauth/usage", headers=headers)
         response.raise_for_status()
     payload = response.json() or {}
     windows: list[AccountUsageWindow] = []
-    mapping = (
-        ("five_hour", "Current session"),
-        ("seven_day", "Current week"),
-        ("seven_day_opus", "Opus week"),
-        ("seven_day_sonnet", "Sonnet week"),
-    )
+    mapping = (("five_hour", "Current session"), ("seven_day", "Current week"), ("seven_day_opus", "Opus week"), ("seven_day_sonnet", "Sonnet week"))
     for key, label in mapping:
         window = payload.get(key) or {}
         util = window.get("utilization")
         if util is None:
             continue
         used = float(util) * 100 if float(util) <= 1 else float(util)
-        windows.append(
-            AccountUsageWindow(
-                label=label,
-                used_percent=used,
-                reset_at=_parse_dt(window.get("resets_at")),
-            )
-        )
+        windows.append(AccountUsageWindow(label=label, used_percent=used, reset_at=_parse_dt(window.get("resets_at"))))
     details: list[str] = []
     extra = payload.get("extra_usage") or {}
     if extra.get("is_enabled"):
@@ -221,16 +194,8 @@ def _fetch_anthropic_account_usage() -> Optional[AccountUsageSnapshot]:
         monthly_limit = extra.get("monthly_limit")
         currency = extra.get("currency") or "USD"
         if isinstance(used_credits, (int, float)) and isinstance(monthly_limit, (int, float)):
-            details.append(
-                f"Extra usage: {used_credits:.2f} / {monthly_limit:.2f} {currency}"
-            )
-    return AccountUsageSnapshot(
-        provider="anthropic",
-        source="oauth_usage_api",
-        fetched_at=_utc_now(),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
+            details.append(f"Extra usage: {used_credits:.2f} / {monthly_limit:.2f} {currency}")
+    return AccountUsageSnapshot(provider="anthropic", source="oauth_usage_api", fetched_at=_utc_now(), windows=tuple(windows), details=tuple(details))
 
 
 def _fetch_openrouter_account_usage(base_url: Optional[str], api_key: Optional[str]) -> Optional[AccountUsageSnapshot]:
@@ -296,21 +261,10 @@ def _fetch_openrouter_account_usage(base_url: Optional[str], api_key: Optional[s
             if isinstance(value, (int, float)) and float(value) > 0:
                 usage_parts.append(f"${float(value):.2f} {label}")
         details.append(" • ".join(usage_parts))
-    return AccountUsageSnapshot(
-        provider="openrouter",
-        source="credits_api",
-        fetched_at=_utc_now(),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
+    return AccountUsageSnapshot(provider="openrouter", source="credits_api", fetched_at=_utc_now(), windows=tuple(windows), details=tuple(details))
 
 
-def fetch_account_usage(
-    provider: Optional[str],
-    *,
-    base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> Optional[AccountUsageSnapshot]:
+def fetch_account_usage(provider: Optional[str], base_url: Optional[str] = None, api_key: Optional[str] = None) -> Optional[AccountUsageSnapshot]:
     normalized = str(provider or "").strip().lower()
     if normalized in {"", "auto", "custom"}:
         return None
@@ -324,3 +278,20 @@ def fetch_account_usage(
     except Exception:
         return None
     return None
+
+
+def register_plugin(ctx) -> None:
+    def _setup(parser):
+        parser.add_argument("provider", nargs="?", default="openai-codex")
+        parser.add_argument("--markdown", action="store_true")
+    def _handler(args):
+        snapshot = fetch_account_usage(args.provider)
+        lines = render_account_usage_lines(snapshot, markdown=args.markdown)
+        return "\n".join(lines) if lines else "No usage snapshot available"
+    ctx.register_cli_command(
+        name="account-usage",
+        help="Show account usage/quota",
+        setup_fn=_setup,
+        handler_fn=_handler,
+        description="Codex/OpenRouter/Anthropic account usage snapshots",
+    )

@@ -1,0 +1,5 @@
+name: account-usage
+version: 1.0.0
+description: "Codex account usage lookup and rendering as a bundled Hermes plugin."
+author: Hermes Agent
+kind: backend
