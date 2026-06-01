@@ -45,13 +45,13 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Any, List, Union
 
-# account_usage imports the OpenAI SDK chain (~230 ms). Only needed by
+# account-usage plugin imports the OpenAI SDK chain (~230 ms). Only needed by
 # /usage; we still import it at module top in the gateway because test
 # patches (tests/gateway/test_usage_command.py) target
 # `gateway.run.fetch_account_usage` as a module-level attribute. The
 # gateway is a long-running daemon, so its boot cost matters less than
 # preserving the established test-patch surface.
-from agent.account_usage import fetch_account_usage, render_account_usage_lines
+from plugins.account_usage.usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
 from hermes_cli.config import cfg_get
@@ -2570,7 +2570,7 @@ class GatewayRunner:
             return cache.get("state")
         used_percent = None
         try:
-            from agent.account_usage import fetch_account_usage
+            from plugins.account_usage.usage import fetch_account_usage
             from gateway.runtime_footer import _codex_quota_used_percent_from_snapshot
 
             snapshot = fetch_account_usage("openai-codex")
