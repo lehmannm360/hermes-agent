@@ -26,6 +26,9 @@ DEFAULT_REASONING_POLICY: dict[str, Any] = {
     # User preference: preserve Codex as long as possible between 2–4%; let
     # existing runtime fallback handle a real quota/rate-limit error.
     "low_quota_hard_task_behavior": "use_codex_until_error",
+    "mimo_provider": "xiaomi",
+    "mimo_flash_model": "mimo-v2.5",
+    "mimo_pro_model": "mimo-v2.5-pro",
     "deepseek_provider": "deepseek",
     "deepseek_flash_model": "deepseek-v4-flash",
     "deepseek_pro_model": "deepseek-v4-pro",
@@ -341,13 +344,26 @@ def format_route_footer(decision: TurnRouteDecision | Mapping[str, Any]) -> str:
 
 
 def fallback_chain_for_profile(policy: Mapping[str, Any], profile: TaskProfile) -> list[dict[str, str]]:
-    """Return an ordered DeepSeek fallback chain for mid-turn Codex exhaustion."""
-    provider = str(_policy_get(policy, "deepseek_provider") or "deepseek").strip() or "deepseek"
-    flash = str(_policy_get(policy, "deepseek_flash_model") or "deepseek-v4-flash").strip()
-    pro = str(_policy_get(policy, "deepseek_pro_model") or "deepseek-v4-pro").strip()
+    """Return an ordered fallback chain: MiMo first, then DeepSeek."""
     hard = profile.difficulty in {"hard", "very_hard"} or profile.reasoning_effort in {"high", "xhigh"}
-    ordered = [pro, flash] if hard else [flash, pro]
-    return [{"provider": provider, "model": model} for model in ordered if model]
+    chain: list[dict[str, str]] = []
+
+    # ── MiMo tier (first priority) ──
+    mimo_provider = str(_policy_get(policy, "mimo_provider") or "").strip()
+    if mimo_provider:
+        mimo_flash = str(_policy_get(policy, "mimo_flash_model") or "mimo-v2.5").strip()
+        mimo_pro = str(_policy_get(policy, "mimo_pro_model") or "mimo-v2.5-pro").strip()
+        ordered = [mimo_pro, mimo_flash] if hard else [mimo_flash, mimo_pro]
+        chain.extend({"provider": mimo_provider, "model": m} for m in ordered if m)
+
+    # ── DeepSeek tier (second priority) ──
+    ds_provider = str(_policy_get(policy, "deepseek_provider") or "deepseek").strip() or "deepseek"
+    ds_flash = str(_policy_get(policy, "deepseek_flash_model") or "deepseek-v4-flash").strip()
+    ds_pro = str(_policy_get(policy, "deepseek_pro_model") or "deepseek-v4-pro").strip()
+    ordered = [ds_pro, ds_flash] if hard else [ds_flash, ds_pro]
+    chain.extend({"provider": ds_provider, "model": m} for m in ordered if m)
+
+    return chain
 
 
 def _stringify_message(message: Any) -> str:
