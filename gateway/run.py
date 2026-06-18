@@ -2641,10 +2641,11 @@ class GatewayRunner:
     ) -> dict:
         """Build the effective model/runtime config for a single turn.
 
-        Applies adaptive reasoning and Codex-first quota-aware routing when
-        ``agent.reasoning_policy.enabled`` is true.  Explicit per-session
-        reasoning overrides (from /reasoning) take precedence and keep the
-        session's selected model/provider stable.
+        Applies adaptive reasoning and MiMo-first, quota-aware routing when
+        ``agent.reasoning_policy.enabled`` is true.  Falls back to Codex then
+        DeepSeek per the policy chain.  Explicit per-session reasoning overrides
+        (from /reasoning) take precedence and keep the session's selected
+        model/provider stable.
         """
         from hermes_cli.models import resolve_fast_mode_overrides
 
@@ -2681,11 +2682,11 @@ class GatewayRunner:
                 route["route_label"] = decision.route_label
                 route["routing_decision"] = decision
 
-                if is_codex_provider(runtime.get("provider")):
-                    # Dynamic chain is ordered by task profile so mid-turn Codex
-                    # exhaustion falls to Flash for easy tasks and Pro for high/xhigh
-                    # work without asking the user.
-                    route["fallback_model"] = fallback_chain_for_profile(policy, decision.profile)
+                # Dynamic chain ordered by task profile, excluding the current
+                # primary so the runtime doesn't retry what just failed.
+                route["fallback_model"] = fallback_chain_for_profile(
+                    policy, decision.profile, exclude_provider=decision.provider
+                )
 
                 if (decision.provider, decision.model) != (runtime.get("provider"), model):
                     try:
