@@ -4,6 +4,8 @@
 
 > **Validation update, 2026-06-20:** The implementation has passed QA in this checkout. The earlier focused account-usage run passed **48/48**, and account usage also passed in the broader pluginization QA run. The final targeted implementation QA run for steps 1-9 passed **399 tests, 0 failed, across 15 files**.
 
+> **Upstream integration update, 2026-06-20:** PR #4 merged latest NousResearch upstream into the private fork and kept the account-usage plugin path healthy. Final synced local/remote `main` is `3d3f55992`; integration merge commit was `1ae1434f7`; upstream commit was `5a53e0f0f`; post-integration targeted validation passed **408 tests, 0 failed**.
+
 **Goal:** Validate and maintain the bundled Codex account usage plugin as the first pluginized private-fork customization, while keeping the pilot merge-safe and useful as a reference for future plugin-first migrations.
 
 **Current architecture:**
@@ -24,6 +26,8 @@ This is the as-built record for the account usage plugin pilot.
 The original plan was to move Codex account usage improvements out of core ownership and into a bundled plugin. That migration is now implemented. This revised plan no longer asks implementers to scaffold, move, or wire the feature from scratch. Instead, it documents what is live, how to validate it, how to keep it merge-safe during upstream updates, and how to roll back without touching credentials.
 
 The pilot originally accepted minimal live core wiring. The 2026-06-20 pluginization follow-up keeps that wiring thin and moves runtime quota access behind the generic quota service seam. This differs from the Compiled Memory Architecture plan, which remains out of scope for this session.
+
+The completed PR #4 upstream merge confirms the pilot's intended maintenance shape: account usage remained plugin-owned, while runtime quota consumption stayed behind `gateway/quota_service.py`. Future upstream work should follow `docs/plans/2026-06-20 Upstream Update Playbook.md` for merge rehearsal, semantic seam checks, and targeted validation.
 
 ## Non-goals
 
@@ -58,6 +62,7 @@ As of the 2026-06-20 documentation update, the account usage work is no longer a
 - Runtime footer/routing quota consumers use the generic `gateway/quota_service.py` seam; if the plugin is disabled, absent, or raises, quota lookup degrades to `None`/empty lines.
 - Anthropic support has been removed from the feature scope and is documented as unsupported for Hermes.
 - Targeted test importance remains high because this feature touches CLI, gateway, quota rendering, and routing/footer consumers. Current QA status: earlier focused account-usage validation passed 48/48 and broader pluginization QA passed.
+- PR #4 upstream integration preserved this shape; final post-merge QA passed 408/408.
 
 ## As-built inventory
 
@@ -104,7 +109,7 @@ These touchpoints are thin integration seams, not stale core ownership. If futur
 
 ### Upstream mirror
 
-`agent/account_usage.py` is a dormant upstream mirror and is clean versus `origin/main` in this checkout. It is not the live shim for the plugin. Do not treat it as active ownership unless a rollback explicitly re-points consumers to it.
+`agent/account_usage.py` is a dormant upstream mirror and should stay clean versus the configured NousResearch upstream remote branch in this checkout. It is not the live shim for the plugin. Do not treat it as active ownership unless a rollback explicitly re-points consumers to it.
 
 ## As-built validation sequence
 
@@ -208,10 +213,12 @@ Do not claim account usage diffs are limited to plugin/test paths only. This pil
 
 ### Retired-core-path restoration checks
 
-Use `origin/main` path checks only when verifying whether a retired core path was restored cleanly to upstream state:
+Use upstream-remote path checks only when verifying whether a retired core path was restored cleanly to upstream state:
 
 ```bash
-git diff --quiet origin/main -- agent/account_usage.py
+UPSTREAM_REMOTE=upstream   # or nous-upstream/nous, depending on this checkout
+git fetch "$UPSTREAM_REMOTE" main
+git diff --quiet "$UPSTREAM_REMOTE/main" -- agent/account_usage.py
 ```
 
 Apply that pattern only to paths that are supposed to be clean versus upstream, such as the dormant `agent/account_usage.py` mirror in this checkout. Do not use it to reason about the whole account-usage feature diff.
@@ -227,9 +234,18 @@ When reviewing upstream merges, treat these as intentional thin wiring if they r
 
 If upstream refactors gateway dispatch, the `gateway.run.fetch_account_usage` patch target used by `tests/gateway/test_usage_command.py` may need to move. Update the test seam deliberately rather than deleting coverage silently.
 
+### Upstream PR #4 notes
+
+The PR #4 upstream integration did not require account usage to move back into core. Keep this as the desired pattern for future updates:
+
+1. Preserve `plugins/account_usage/` as the feature owner.
+2. Preserve `gateway/quota_service.py` as the only runtime quota snapshot seam for footer/routing consumers.
+3. Re-run account-usage, gateway usage-command, quota-service, footer, and adaptive-routing tests when upstream changes any nearby gateway/session/plugin path.
+4. Audit semantic conflicts even when account-usage files do not conflict textually, because upstream refactors in `gateway/run.py`, `gateway/session.py`, or plugin discovery can change the effective call path.
+
 ### Workspace caveat
 
-This checkout may show zero account-usage delta versus `origin/main` if the relevant migration has already landed or the branch is aligned. Validate rollback and diff expectations against the real private fork when preparing a private-fork upstream update.
+This checkout may show zero account-usage delta versus the configured upstream remote branch if the relevant migration has already landed or the branch is aligned. Validate rollback and diff expectations against the real private fork when preparing a private-fork upstream update.
 
 ## Rollback and fallback guidance
 
@@ -268,14 +284,15 @@ The pilot remains healthy when all applicable criteria are true:
 - [x] No stale core ownership remains; `agent/account_usage.py` is either clean versus upstream or explicitly designated as the live rollback source.
 - [ ] Drift between `plugins/account_usage/usage.py` and dormant upstream `agent/account_usage.py` is checked, or a single-source-of-truth decision is documented before accepting divergence.
 - [x] Repository manual inventory is updated at `docs/manual/2026-06-20 Hermes Active Customized Features.md` when the inventory changes; no Drive upload is required.
-- [ ] Upstream merge checks pass for the affected account-usage paths and intentional core touchpoints.
+- [x] Upstream PR #4 merge checks passed for the affected account-usage paths and intentional core touchpoints.
 - [x] Focused account-usage QA passed 48/48 and broader pluginization QA passed.
 - [x] Final targeted implementation QA for steps 1-9 passed 399 tests, 0 failed, across 15 files.
+- [x] Post-upstream PR #4 targeted validation passed 408 tests, 0 failed.
 
 ## Suggested maintenance workflow
 
 1. Review the feature diff against the private-fork `BASE` for actual account-usage changes.
-2. Check retired upstream mirror paths with `git diff --quiet origin/main -- <path>` only when they are expected to be clean.
+2. Check retired upstream mirror paths with `git diff --quiet "$UPSTREAM_REMOTE/main" -- <path>` only when they are expected to be clean.
 3. Verify plugin metadata and service behavior with targeted plugin tests.
 4. Verify CLI, gateway, quota service, and footer/routing consumers only for touched seams.
 5. Check plugin-versus-upstream-mirror drift and document whether the plugin or the mirror is the source of truth.

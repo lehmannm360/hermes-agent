@@ -1,32 +1,37 @@
 # Hermes Active Customized Features — 20-06-2026
 
-Generated: 20-06-2026 16:30 MYT  
-Repository: `/Users/lehmann/.hermes/hermes-agent`  
-Upstream comparison: `origin/main` = NousResearch upstream  
-Private fork push remote: `agent` = `lehmannm360/hermes-agent`
+Generated: 20-06-2026 16:30 MYT
+Repository: `/Users/lehmann/.hermes/hermes-agent`
+Upstream comparison: `upstream/main` or the configured NousResearch remote
+Private fork push remote: configured private-fork remote for `lehmannm360/hermes-agent` (for example `agent` in earlier notes, or `origin` in this checkout)
+Latest upstream integration: PR #4, merged after integration commit `1ae1434f7` brought in NousResearch upstream `5a53e0f0f`; final synced local/remote `main` is `3d3f55992`.
 
 ## Summary
 
-This document lists the active private-fork customizations currently present in Esa's Hermes checkout, based on the private-fork delta, completed pluginization work on branch `custom/pluginize-active-features`, and the active Hermes skill/reference notes.
+This document lists the active private-fork customizations currently present in Esa's Hermes checkout, based on the private-fork delta, completed pluginization work on branch `custom/pluginize-active-features`, the completed upstream integration PR #4, and the active Hermes skill/reference notes.
 
 Implementation and QA status as of the pluginization update:
 
 - Steps 1-9 of the remaining active-feature pluginization work are implemented and ready for documentation/user review.
 - Final targeted implementation QA passed **399 tests, 0 failed, across 15 files**.
 - The earlier focused account-usage run passed **48/48**, and account usage also passed in the broader QA run.
+- The upstream integration PR #4 completed successfully: final `main` is `3d3f55992`, integration merge commit was `1ae1434f7`, upstream merged commit was `5a53e0f0f`, and post-integration QA passed **408 tests, 0 failed** across targeted upstream/plugin/custom-feature validation.
 - Compiled Memory Architecture is intentionally excluded from this update and remains governed by its separate plan.
 
-Current private-fork delta versus `origin/main`:
+Future upstream-update guidance is maintained in `docs/plans/2026-06-20 Upstream Update Playbook.md`. Use that playbook before the next upstream sync instead of relying on the stale changed-file snapshot that this document used to carry.
 
-- Changed/custom files listed below: representative, not exhaustive after the completed pluginization overlay.
-- Net code/test delta: not recomputed after the final QA run; use the feature descriptions below as the current source of truth.
+Current private-fork delta handling:
+
+- Do not treat old changed-file lists as canonical after an upstream merge. They go stale as soon as upstream refactors or the private fork lands pluginization work.
+- Recompute the active private-fork delta from git when needed. The recommended commands and review checklist live in `docs/plans/2026-06-20 Upstream Update Playbook.md`.
+- Use the feature descriptions below as the maintained source of truth for active custom behavior.
 - Main touched areas: generic plugin hooks, quota service seam, gateway runtime/footer, message allowlist, adaptive routing, noiseless-failover policy, Codex account usage plugin, config, install scripts, tests.
 
 ## Active customized features
 
 ### 1. Adaptive reasoning and MiMo-first quota-aware model routing
 
-Status: active hook-backed customization; bundled plugin present  
+Status: active hook-backed customization; bundled plugin present
 Primary files:
 
 - `agent/reasoning_policy.py`
@@ -83,7 +88,7 @@ Plugin migration candidate:
 
 ### 2. Quiet/no-noisy fallback behavior and stream warming detection
 
-Status: active core behavior with policy-only bundled plugin  
+Status: active core behavior with policy-only bundled plugin
 Primary files:
 
 - `agent/chat_completion_helpers.py`
@@ -115,7 +120,7 @@ Plugin migration candidate:
 
 ### 3. Codex account usage improvements
 
-Status: active, pluginized; QA passed  
+Status: active, pluginized; QA passed
 Primary files:
 
 - `plugins/account_usage/usage.py`
@@ -151,7 +156,7 @@ Plugin migration candidate:
 
 ### 4. Gateway runtime footer customization
 
-Status: active hook-backed customization; response-ref persistence core-owned  
+Status: active hook-backed customization; response-ref persistence core-owned
 Primary files:
 
 - `gateway/runtime_footer.py`
@@ -189,10 +194,11 @@ Plugin migration candidate:
 
 ### 5. Cross-platform message allowlist registry
 
-Status: active hook-backed security customization  
+Status: active hook-backed security customization
 Primary files:
 
 - `gateway/message_allowlist.py`
+- `gateway/authz_mixin.py`
 - `gateway/run.py`
 - `hermes_cli/plugins.py`
 - `plugins/message-allowlist/`
@@ -210,6 +216,7 @@ What it does:
 - Registers `pre_gateway_authorize_message`, which covers both cold message handling and active-session busy paths.
 - Distinguishes allowlist configured/enabled state so enabling the plugin alone does not accidentally engage fail-closed enforcement.
 - Fails closed when allowlist enforcement is enabled and hook callbacks do not explicitly allow.
+- After upstream PR #4, auth-related gateway seams live primarily in `gateway/authz_mixin.py`; future updates must re-check that file as well as `gateway/run.py` so allowlist/auth behavior is not silently dropped by upstream refactors.
 
 Example shape:
 
@@ -239,9 +246,10 @@ Plugin migration candidate:
 
 ### 6. Unauthorized DM behavior hardening
 
-Status: active core security invariant around hook fire site  
+Status: active core security invariant around hook fire site
 Primary files:
 
+- `gateway/authz_mixin.py`
 - `gateway/run.py`
 - `tests/gateway/test_unauthorized_dm_behavior.py`
 - `tests/plugins/message_allowlist/test_authorize_hook_contract.py`
@@ -265,7 +273,7 @@ Plugin migration candidate:
 
 ### 7. Per-session reasoning override precedence
 
-Status: active core invariant  
+Status: active core invariant
 Primary files:
 
 - `gateway/run.py`
@@ -290,7 +298,7 @@ Plugin migration candidate:
 
 ### 8. Install/update behavior cleanup
 
-Status: active small installer customization  
+Status: active small installer customization
 Primary files:
 
 - `scripts/install.sh`
@@ -315,7 +323,7 @@ Plugin migration candidate:
 
 ### Compiled Memory Architecture
 
-Status: planned, not implemented  
+Status: planned, not implemented
 Current plan location:
 
 - Local: `~/.hermes/docs/plans/2026-06-01-compiled-memory-architecture-implementation-plan.md`
@@ -370,12 +378,14 @@ Higher risk:
 4. Keep `transform_status_event` documented as declared-but-not-fired until a live fire site is implemented and tested.
 5. Preserve response-ref persistence and row/ref ordering as core-owned even when footer/operator surfaces are pluginized.
 6. Preserve route cache-safety: plugins must not mutate messages, history, toolsets, system prompts, or memory.
-7. For feature branches, record `BASE=$(git rev-parse HEAD)` and verify the feature diff against `$BASE`, not against `origin/main`, because this private fork already has unrelated customizations.
+7. For feature branches, record `BASE=$(git rev-parse HEAD)` and verify the feature diff against `$BASE`, not against the upstream remote branch, because this private fork already has unrelated customizations.
 8. Push private fork work to `agent`, not upstream.
-9. Re-run targeted tests after each upstream merge:
+9. During upstream merges, audit semantic conflicts in addition to textual conflicts. The PR #4 merge showed that upstream can move logic into new files such as `gateway/authz_mixin.py`, causing security seams to be lost without a direct conflict in `gateway/run.py`.
+10. Re-run targeted tests after each upstream merge:
    - `tests/agent/test_reasoning_policy.py`
    - `tests/gateway/test_runtime_footer.py`
    - `tests/gateway/test_unauthorized_dm_behavior.py`
+   - `tests/gateway/test_usage_command.py`
    - `tests/hermes_cli/test_gateway.py`
    - `tests/plugins/gateway_runtime_metadata/`
    - `tests/plugins/message_allowlist/`
@@ -388,48 +398,27 @@ Higher risk:
 
 Account-usage validation note: include `tests/plugins/account_usage/test_codex_usage.py`, `tests/plugins/account_usage/test_plugin_load.py`, and `tests/gateway/test_usage_command.py` when validating the plugin pilot, and run them only through `scripts/run_tests.sh`.
 
-## Current changed files vs `origin/main`
+## Current changed files and recomputation guidance
 
-The list below is a representative active-feature inventory after pluginization, not an exhaustive diff. Generated docs and out-of-scope Compiled Memory files are intentionally excluded.
+Do not freeze a changed-file list in this document. After PR #4, upstream and private-fork history are aligned at `3d3f55992`, and old pre-upstream lists no longer describe the real delta. Recompute the list whenever a future update needs it.
 
-```text
-agent/agent_runtime_helpers.py
-agent/chat_completion_helpers.py
-agent/reasoning_policy.py
-cli.py
-gateway/message_allowlist.py
-gateway/quota_service.py
-gateway/run.py
-gateway/runtime_footer.py
-gateway/session.py
-hermes_cli/plugins.py
-hermes_cli/config.py
-hermes_state.py
-plugins/account_usage/__init__.py
-plugins/account_usage/plugin.yaml
-plugins/account_usage/usage.py
-plugins/adaptive-routing/__init__.py
-plugins/adaptive-routing/plugin.yaml
-plugins/gateway-noiseless-failover/__init__.py
-plugins/gateway-noiseless-failover/plugin.yaml
-plugins/gateway-runtime-metadata/__init__.py
-plugins/gateway-runtime-metadata/plugin.yaml
-plugins/message-allowlist/__init__.py
-plugins/message-allowlist/plugin.yaml
-scripts/install.sh
-setup-hermes.sh
-tests/agent/test_reasoning_policy.py
-tests/gateway/test_runtime_footer.py
-tests/gateway/test_unauthorized_dm_behavior.py
-tests/hermes_cli/test_gateway.py
-tests/plugins/adaptive_routing/
-tests/plugins/account_usage/test_codex_usage.py
-tests/plugins/account_usage/test_plugin_load.py
-tests/plugins/gateway_noiseless_failover/
-tests/plugins/gateway_runtime_metadata/
-tests/plugins/message_allowlist/
-tests/test_account_usage.py
-tests/test_hermes_state.py
-tests/test_plugin_hooks.py
-tests/test_quota_service.py
+Recommended commands:
+
+```bash
+PRIVATE_REMOTE=origin      # or agent, depending on this checkout
+UPSTREAM_REMOTE=upstream   # or nous-upstream/nous, depending on this checkout
+git fetch "$PRIVATE_REMOTE" main
+git fetch "$UPSTREAM_REMOTE" main
+git status --short
+git diff --name-only "$UPSTREAM_REMOTE/main...$PRIVATE_REMOTE/main"
+git diff --stat "$UPSTREAM_REMOTE/main...$PRIVATE_REMOTE/main"
 ```
+
+Set `PRIVATE_REMOTE` to the configured `lehmannm360/hermes-agent` remote and `UPSTREAM_REMOTE` to the configured NousResearch remote before running the commands. For feature work after a local baseline, prefer a local base:
+
+```bash
+BASE=$(git rev-parse HEAD)
+git diff --name-only "$BASE"...HEAD
+```
+
+When reviewing the recomputed list, map files back to the active-feature inventory above and to the playbook in `docs/plans/2026-06-20 Upstream Update Playbook.md`. Pay special attention to semantic moves in gateway authorization, response persistence/session semantics, plugin discovery, config migrations, and GitHub workflow files.
