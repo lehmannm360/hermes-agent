@@ -1,18 +1,23 @@
 # Remaining Customized Features Pluginization Plan — 20-06-2026
 
-**Status:** Steps 1-9 implemented and QA-ready for documentation/user review on branch `custom/pluginize-active-features`.  
-**Scope:** Remaining active private-fork customizations after the completed `account-usage` plugin pilot, excluding Compiled Memory Architecture implementation.  
-**Source inventory:** `docs/manual/2026-06-20 Hermes Active Customized Features.md`.  
-**Sequencing context:** `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`.  
+**Status:** Steps 1-9 implemented, upstream integration completed through PR #4, and documentation updated for future update playbook use.
+**Scope:** Remaining active private-fork customizations after the completed `account-usage` plugin pilot, excluding Compiled Memory Architecture implementation.
+**Source inventory:** `docs/manual/2026-06-20 Hermes Active Customized Features.md`.
+**Sequencing context:** `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`.
 **Archived precedent:** `docs/plans/2026-06-01 Account Usage Plugin Implementation Plan.md` is implemented and retained as the as-built validation record.
+**Future update playbook:** `docs/plans/2026-06-20 Upstream Update Playbook.md`.
 
 > **QA status, 2026-06-20:** Implementation QA is complete and ready for documentation/user review. The final targeted implementation run passed **399 tests, 0 failed, across 15 files**. The earlier focused account-usage run passed **48/48**, and the account-usage implementation also passed in the broader QA run. Anthropic account usage is confirmed unsupported for Hermes and is not part of this migration scope.
+
+> **Upstream integration update, 2026-06-20:** PR #4 merged latest NousResearch upstream into this private fork. Final synced local/remote `main` is `3d3f55992`; the integration merge commit before PR merge was `1ae1434f7`; the upstream commit merged was `5a53e0f0f`. Post-integration targeted validation passed **408 tests, 0 failed** across upstream/plugin/custom-feature checks.
 
 > **Compiled Memory note:** Compiled Memory Architecture remains out of scope for this session. This document preserves it only as a sequencing reference and does not update its implementation plan.
 
 ## 1. Goal
 
-Reduce private-fork merge risk before updating from `origin/main` by moving active Hermes customizations behind bundled plugins where existing extension seams are sufficient, and by isolating unavoidable core work into tiny, generic, upstream-compatible hook seams.
+Reduce private-fork merge risk before updating from the configured NousResearch upstream remote by moving active Hermes customizations behind bundled plugins where existing extension seams are sufficient, and by isolating unavoidable core work into tiny, generic, upstream-compatible hook seams.
+
+PR #4 is the first completed validation of that goal after the pluginization work. The merge succeeded, but it exposed an important update pitfall: upstream extracted authorization behavior into `gateway/authz_mixin.py`, so message-allowlist/auth seams had to be re-injected there rather than only in `gateway/run.py`. Future update work should treat this document as the migration design record and use `docs/plans/2026-06-20 Upstream Update Playbook.md` as the step-by-step operational checklist.
 
 The migration target was not “every customization becomes a plugin immediately.” The implemented target is:
 
@@ -76,6 +81,15 @@ Each new hook defines a fire site, kwargs, return type, aggregation rule, failur
 ### Generic quota service seam
 
 `gateway/quota_service.py` is the as-built account/quota snapshot seam. It lets gateway runtime/footer/routing callers fetch and render quota snapshots without importing `plugins.account_usage` from hot gateway code. The account-usage plugin registers a fetcher and renderer during plugin discovery. If the plugin is disabled, absent, or raises, the service returns `None` or an empty line list and routing degrades to quota-unavailable behavior instead of crashing or blocking.
+
+### PR #4 semantic-conflict lesson
+
+Textual conflict resolution was not enough during the upstream integration. Upstream moved gateway authorization logic into `gateway/authz_mixin.py`, which meant the active message-allowlist security seam could have been silently lost if the review only searched `gateway/run.py`. For future updates:
+
+- search for moved call sites, not only conflicted files;
+- confirm the `pre_gateway_authorize_message` hook still covers cold and active-session busy paths;
+- verify queue/control commands still bypass both message guards before normal authorization;
+- run the authorization-focused tests through `scripts/run_tests.sh` before trusting the merge.
 
 ## 5. Target plugin packages
 
@@ -225,7 +239,7 @@ flowchart TD
    BASE=$(git rev-parse HEAD)
    ```
 
-3. Capture current changed paths against `origin/main` for awareness, but do not use `origin/main` as the feature-diff base for new plugin work.
+3. Capture current changed paths against the configured upstream remote branch for awareness, but do not use that upstream branch as the feature-diff base for new plugin work.
 4. Run the current targeted tests for active customizations:
 
    ```bash
@@ -368,7 +382,7 @@ Rule:
 
 ### Phase 9 — Upstream update rehearsal — implementation QA complete
 
-Before updating the working private fork from `origin/main`, rehearse with the smallest possible custom delta.
+Before updating the working private fork from upstream, rehearse with the smallest possible custom delta.
 
 Final targeted implementation QA result:
 
@@ -379,7 +393,8 @@ Final targeted implementation QA result:
 Representative check command shape:
 
 ```bash
-git fetch origin main
+UPSTREAM_REMOTE=upstream   # or nous-upstream/nous, depending on this checkout
+git fetch "$UPSTREAM_REMOTE" main
 git diff --name-only "$BASE"...HEAD
 git diff --check
 scripts/run_tests.sh \
@@ -406,6 +421,28 @@ Exit criteria:
 - no account usage implementation churn is present; status-only documentation updates are acceptable when they clarify validation state or unsupported provider scope;
 - no unexpected deletions appear in the post-merge diff.
 
+### Phase 10 — Completed upstream integration PR #4
+
+PR #4 completed the real upstream integration after the rehearsal phase.
+
+Outcome record:
+
+- final synced local/remote `main`: `3d3f55992`;
+- integration merge commit before PR merge: `1ae1434f7`;
+- NousResearch upstream commit merged: `5a53e0f0f`;
+- validation result: **408 tests passed, 0 failed** across targeted upstream/plugin/custom-feature validation.
+
+Conflict and resolution record:
+
+- `gateway/authz_mixin.py` became the post-upstream home for authorization-related custom seams;
+- `gateway/run.py` still needed gateway orchestration review, but it was no longer the only authorization seam location;
+- `gateway/session.py` and `hermes_state.py` required response-reference/session-return semantic checks;
+- `hermes_cli/plugins.py` required hook preservation checks;
+- `website/docs/user-guide/features/hooks.md` required documentation conflict handling;
+- GitHub remote push required a token with `workflow` scope because upstream changed `.github/workflows/build-windows-installer.yml`.
+
+This phase is now closed. Future upstream work should start from `docs/plans/2026-06-20 Upstream Update Playbook.md`.
+
 ## 7. Feature-to-test map
 
 | Feature | Focused tests / QA coverage | As-built result |
@@ -417,6 +454,7 @@ Exit criteria:
 | Quiet fallback / stream warming | `tests/plugins/gateway_noiseless_failover/test_status_policy.py` plus existing runtime visibility coverage | Passed policy coverage; live `transform_status_event` fire site intentionally deferred |
 | Quota service seam | `tests/test_quota_service.py` plus account-usage/gateway consumers | Passed in final targeted implementation QA; disabled plugin degrades to empty/none snapshots |
 | Hook declarations | `tests/test_plugin_hooks.py` | Passed in final targeted implementation QA |
+| Upstream PR #4 integration | Targeted upstream/plugin/custom-feature validation through `scripts/run_tests.sh` | 408 passed, 0 failed after merging upstream `5a53e0f0f` |
 | Installer cleanup | Not part of this implementation | Not validated by this pluginization QA run |
 
 ## 8. Acceptance criteria for the overall migration program
@@ -432,8 +470,9 @@ Exit criteria:
 - Prompt-cache invariants remain intact: no mid-session toolset, system-prompt, or memory injection mutation.
 - All targeted tests run through `scripts/run_tests.sh`.
 - Final targeted implementation QA passed 399/399 across 15 files; earlier focused account-usage QA passed 48/48.
-- Private-fork feature diffs are checked against the recorded `BASE`, not only against `origin/main`.
-- Retired core paths are checked against `origin/main` only when they are expected to be clean upstream mirrors.
+- Completed upstream PR #4 QA passed 408/408 after integrating upstream `5a53e0f0f`.
+- Private-fork feature diffs are checked against the recorded `BASE`, not only against the upstream remote branch.
+- Retired core paths are checked against the upstream remote branch only when they are expected to be clean upstream mirrors.
 
 ## 9. Rollback guidance
 
@@ -474,6 +513,8 @@ scripts/run_tests.sh \
 | `hermes_cli/config.py` churn conflicts | Adaptive routing config keys live in `DEFAULT_CONFIG` in `hermes_cli/config.py` (~264 KB, high-churn upstream file); moving them to a plugin namespace reduces future conflicts but renaming requires a `_config_version` bump — keep existing keys as source of truth until the routing plugin is live, then migrate in a versioned change |
 | Cross-plugin quota dependency breaks routing | Adaptive routing depends on quota snapshots from the `plugins/account_usage/` plugin through `gateway/quota_service.py`; the seam degrades to quota-unavailable routing when account usage is disabled or snapshots are missing, not crash or hang |
 | Status-event hook accidentally treated as live | `transform_status_event` is declared but not fired; `gateway-noiseless-failover` must be described as policy-only until a live fire site and terminal-failure bypass are implemented |
+| Semantic seam loss after upstream refactors | Audit moved call sites after every merge. PR #4 moved authorization into `gateway/authz_mixin.py`, so auth/message-allowlist seams had to be restored there even when the old `gateway/run.py` mental model looked familiar |
+| GitHub push blocked by workflow changes | If upstream changes `.github/workflows/**`, GitHub may reject pushes unless the token has `workflow` scope; fix credentials rather than rewriting or dropping upstream workflow changes |
 
 ## 11. When to split into separate plans
 
@@ -494,6 +535,6 @@ Recommended future sub-plans:
 
 ## 12. Summary
 
-The migration implemented selective pluginization, not forced extraction. Runtime metadata now has bundled plugin surfaces while response-ref persistence remains core-owned. Message allowlist and unauthorized DM behavior use a single fail-closed authorization seam covering cold and busy paths. Adaptive routing uses a cache-safe route hook while explicit session/forced reasoning overrides remain stronger core invariants. Quiet fallback has a policy-only bundled plugin and a declared-but-not-fired status hook; live status suppression is intentionally deferred. Installer cleanup stays outside the plugin program.
+The migration implemented selective pluginization, not forced extraction. Runtime metadata now has bundled plugin surfaces while response-ref persistence remains core-owned. Message allowlist and unauthorized DM behavior use a single fail-closed authorization seam covering cold and busy paths; after PR #4, the key auth seam location includes `gateway/authz_mixin.py`. Adaptive routing uses a cache-safe route hook while explicit session/forced reasoning overrides remain stronger core invariants. Quiet fallback has a policy-only bundled plugin and a declared-but-not-fired status hook; live status suppression is intentionally deferred. Installer cleanup stays outside the plugin program.
 
-Compiled Memory Architecture remains out of scope for this session and is not validated by the 399-test pluginization QA run.
+Compiled Memory Architecture remains out of scope for this session and is not validated by the 399-test pluginization QA run or the later 408-test upstream-integration QA run.
