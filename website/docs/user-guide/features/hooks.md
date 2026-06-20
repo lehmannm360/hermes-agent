@@ -367,7 +367,7 @@ def register(ctx):
 
 - Callbacks receive **keyword arguments**. Always accept `**kwargs` for forward compatibility — new parameters may be added in future versions without breaking your plugin.
 - If a callback **crashes**, it's logged and skipped. Other hooks and the agent continue normally. A misbehaving plugin can never break the agent.
-- Two hooks' return values affect behavior: [`pre_tool_call`](#pre_tool_call) can **block** the tool, and [`pre_llm_call`](#pre_llm_call) can **inject context** into the LLM call. All other hooks are fire-and-forget observers.
+- Several hooks' return values affect behavior. Security-sensitive hooks document their fail-open/fail-closed rules explicitly below; observer hooks ignore return values.
 
 ### Quick reference
 
@@ -383,6 +383,11 @@ def register(ctx):
 | [`on_session_reset`](#on_session_reset) | Gateway swaps in a fresh session key (e.g. `/new`, `/reset`) | ignored |
 | [`subagent_stop`](#subagent_stop) | A `delegate_task` child has exited | ignored |
 | [`pre_gateway_dispatch`](#pre_gateway_dispatch) | Gateway received a user message, before auth + dispatch | `{"action": "skip" \| "rewrite" \| "allow", ...}` to influence flow |
+| [`pre_gateway_authorize_message`](#pre_gateway_authorize_message) | Gateway is authorizing an inbound user message | `{"allow": true, ...}` or `{"deny": true, ...}`; fail-closed when allowlist enforcement is enabled |
+| [`format_gateway_runtime_footer`](#format_gateway_runtime_footer) | Gateway final-response runtime metadata is available | `str` to replace footer, `None`/empty to use core default |
+| [`on_final_response_persisted`](#on_final_response_persisted) | Gateway assistant row + response ref have been persisted | ignored |
+| [`resolve_turn_route`](#resolve_turn_route) | Gateway resolves provider/model/reasoning for the next turn | route override dict, or `None` for default/core routing |
+| [`transform_status_event`](#transform_status_event) | Declared for future gateway status-event filtering | Not fired yet |
 | [`pre_approval_request`](#pre_approval_request) | Dangerous command needs user approval, before the prompt/notification is sent | ignored |
 | [`post_approval_response`](#post_approval_response) | User responded to an approval prompt (or it timed out) | ignored |
 | [`transform_tool_result`](#transform_tool_result) | After any tool returns, before the result is handed back to the model | `str` to replace the result, `None` to leave unchanged |
@@ -912,6 +917,118 @@ def buffer_or_rewrite(event, **kwargs):
 def register(ctx):
     ctx.register_hook("pre_gateway_dispatch", buffer_or_rewrite)
 ```
+
+---
+
+### `pre_gateway_authorize_message`
+
+Fires when the gateway authorizes a normalized inbound user message. It runs after [`pre_gateway_dispatch`](#pre_gateway_dispatch) and covers both the cold message path and the active-session busy-message path.
+
+This hook is for security policy such as cross-platform allowlists. It is not a general message rewrite hook; use [`pre_gateway_dispatch`](#pre_gateway_dispatch) for skip/rewrite flows.
+
+**Callback signature:**
+
+```python
+def my_callback(event, gateway, source, **kwargs):
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `event` | `MessageEvent` | The normalized inbound gateway message. |
+| `gateway` | `GatewayRunner` | The active gateway runner. |
+| `source` | `SessionSource` | Platform/user/chat identity for the inbound message. |
+
+**Return value:**
+
+| Return | Effect |
+|--------|--------|
+| `{"allow": True, "reason": "..."}` | Explicitly allow the message. |
+| `{"deny": True, "reason": "..."}` | Deny the message. |
+| `None` / empty | Defer. When allowlist enforcement is enabled and callbacks exist, this is treated as deny unless another callback explicitly allows. |
+
+**Fail-closed contract:** when allowlist enforcement is enabled and hook callbacks are registered, the message is denied unless a callback explicitly returns `{"allow": True}`. Hook exceptions are logged and treated as deny for the security gate.
+
+**Bypass contract:** control/approval commands that must reach the runner while an agent is blocked — such as `/stop`, `/new`, `/queue`, `/status`, `/approve`, and `/deny` — bypass before this hook fires.
+
+**Use cases:** cross-platform member registries, owner-only gateway access, team allowlists, unauthorized-DM hardening.
+
+---
+
+### `format_gateway_runtime_footer`
+
+Fires when the gateway has final-response runtime metadata and is ready to build a runtime footer.
+
+**Callback signature:**
+
+```python
+def my_callback(model: str, context_tokens: int, context_length: int | None,
+                cwd: str, provider: str, reasoning_effort: str,
+                route_label: str, codex_quota_used_percent: float | None,
+                response_ref: str | None, platform_key: str | None,
+                user_config: dict, **kwargs):
+```
+
+**Return value:** a non-empty string replaces the footer. `None` or an empty string defers to the core footer builder.
+
+**Contract:** this hook is cache-safe and must never block response delivery. It must not mutate messages, history, toolsets, system prompts, or memory. The gateway's trailing-send footer path remains core-owned.
+
+**Use cases:** custom runtime footer formatting, hiding/showing selected metadata fields, platform-specific footer text.
+
+---
+
+### `on_final_response_persisted`
+
+Fires after the gateway has persisted the assistant message row and response-reference mapping.
+
+**Callback signature:**
+
+```python
+def my_callback(session_id: str, message_id: int, ref_id: str,
+                platform: str, chat_id: str, session_key: str, **kwargs):
+```
+
+**Return value:** ignored.
+
+**Contract:** response-ref persistence remains core-owned. This hook is a best-effort notification after the row/ref exists; exceptions are logged and swallowed so final response delivery is never blocked.
+
+**Use cases:** response-reference audit logs, operator lookup caches, analytics attached to persisted assistant rows.
+
+---
+
+### `resolve_turn_route`
+
+Fires before the gateway constructs an agent for a turn, when adaptive routing is enabled and no forced/session reasoning override is active.
+
+**Callback signature:**
+
+```python
+def my_callback(user_message: str, primary_provider: str, primary_model: str,
+                session_key: str, policy: dict, **kwargs):
+```
+
+**Return value:** a dict with routing overrides, or `None` to keep default/core routing.
+
+Recognized keys include:
+
+| Key | Meaning |
+|-----|---------|
+| `provider` | Provider to use for this turn. |
+| `model` | Model to use for this turn. |
+| `reasoning_effort` | Reasoning effort for this turn. |
+| `route_label` | Human-readable route label for diagnostics/footer output. |
+| `runtime_provider` | Runtime provider value when different from the display provider. |
+
+**Cache-safety contract:** the hook receives explicit turn inputs only. The caller ignores dangerous returned keys such as `messages`, `history`, `tools`, `toolsets`, `system`, and `memory`. Explicit `/reasoning` session overrides and forced reasoning config always outrank plugin route decisions.
+
+**Use cases:** model/provider routing policy, quota-aware fallback preferences, route-label diagnostics.
+
+---
+
+### `transform_status_event`
+
+This hook name is declared in `VALID_HOOKS` for future gateway status-event filtering, but it is **not fired in the current codebase**.
+
+Do not rely on it for live suppression or rewriting yet. Plugins may ship policy tables and diagnostics for future use, but terminal failures and user-actionable errors remain controlled by the existing core status-delivery path until a live fire site is implemented and documented.
 
 ---
 

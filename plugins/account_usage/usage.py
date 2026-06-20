@@ -295,3 +295,12 @@ def register_plugin(ctx) -> None:
         handler_fn=_handler,
         description="Codex/OpenRouter/Anthropic account usage snapshots",
     )
+
+    # Register with the generic quota service seam so gateway code never
+    # imports this plugin module directly.
+    try:
+        from gateway.quota_service import register_quota_fetcher, register_quota_renderer
+        register_quota_fetcher(fetch_account_usage)
+        register_quota_renderer(render_account_usage_lines)
+    except Exception:
+        pass

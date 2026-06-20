@@ -1,0 +1,5 @@
+name: message-allowlist
+version: 1.0.0
+description: "Cross-platform message allowlist authorization as a bundled plugin."
+author: Hermes Agent
+kind: standalone

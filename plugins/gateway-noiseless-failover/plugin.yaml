@@ -1,0 +1,5 @@
+name: gateway-noiseless-failover
+version: 1.0.0
+description: "Quiet fallback policy for gateway provider failover."
+author: Hermes Agent
+kind: standalone

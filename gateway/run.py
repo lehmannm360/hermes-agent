@@ -45,13 +45,27 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Any, List, Union
 
-# account-usage plugin imports the OpenAI SDK chain (~230 ms). Only needed by
-# /usage; we still import it at module top in the gateway because test
-# patches (tests/gateway/test_usage_command.py) target
-# `gateway.run.fetch_account_usage` as a module-level attribute. The
-# gateway is a long-running daemon, so its boot cost matters less than
-# preserving the established test-patch surface.
-from plugins.account_usage.usage import fetch_account_usage, render_account_usage_lines
+# Account-usage data is accessed through the generic quota service seam
+# (gateway.quota_service) so this module never imports the account-usage
+# plugin directly.  The shim attributes below preserve the established
+# test-patch surface: tests that patch `gateway.run.fetch_account_usage`
+# continue to work.
+from gateway.quota_service import (
+    fetch_quota_snapshot as _fetch_quota_snapshot,
+    render_quota_lines as _render_quota_lines,
+)
+
+
+def fetch_account_usage(provider, *, base_url=None, api_key=None):
+    """Backward-compat shim delegating to gateway.quota_service."""
+    return _fetch_quota_snapshot(provider, base_url=base_url, api_key=api_key)
+
+
+def render_account_usage_lines(snapshot, *, markdown=False):
+    """Backward-compat shim delegating to gateway.quota_service."""
+    return _render_quota_lines(snapshot, markdown=markdown)
+
+
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
 from hermes_cli.config import cfg_get
@@ -2570,7 +2584,6 @@ class GatewayRunner:
             return cache.get("state")
         used_percent = None
         try:
-            from plugins.account_usage.usage import fetch_account_usage
             from gateway.runtime_footer import _codex_quota_used_percent_from_snapshot
 
             snapshot = fetch_account_usage("openai-codex")
@@ -2662,6 +2675,56 @@ class GatewayRunner:
 
         policy = self._load_reasoning_policy()
         if bool(policy.get("enabled")) and not force_reasoning_config:
+            # Fire resolve_turn_route hook — cache-safe: only explicit turn
+            # inputs are passed, not mutable messages/history/toolsets/system.
+            # Dangerous returned keys are ignored.  Session overrides outrank
+            # this hook (enforced by the force_reasoning_config gate above).
+            _DANGEROUS_ROUTE_KEYS = frozenset({
+                "messages", "history", "tools", "toolsets", "system", "memory",
+            })
+            _session_key_for_route = ""
+            _route_hook_overridden = False
+            try:
+                from hermes_cli.plugins import invoke_hook as _invoke_route_hook
+                _route_results = _invoke_route_hook(
+                    "resolve_turn_route",
+                    user_message=user_message,
+                    primary_provider=runtime.get("provider"),
+                    primary_model=model,
+                    session_key=_session_key_for_route,
+                    policy=policy,
+                )
+                for _rr in _route_results:
+                    if not isinstance(_rr, dict):
+                        continue
+                    # Filter out dangerous keys
+                    safe_overrides = {
+                        k: v for k, v in _rr.items() if k not in _DANGEROUS_ROUTE_KEYS
+                    }
+                    if "provider" in safe_overrides or "model" in safe_overrides:
+                        new_provider = safe_overrides.get("provider", runtime.get("provider"))
+                        new_model = safe_overrides.get("model", model)
+                        try:
+                            from hermes_cli.runtime_provider import resolve_runtime_provider as _rrp
+                            resolved = _rrp(requested=new_provider, target_model=new_model)
+                            runtime = self._runtime_dict_from_kwargs(resolved)
+                            route["model"] = new_model
+                            route["runtime"] = runtime
+                            route["signature"] = self._route_signature(new_model, runtime)
+                            _route_hook_overridden = True
+                        except Exception:
+                            pass
+                    if "reasoning_effort" in safe_overrides:
+                        route["reasoning_config"] = {"effort": safe_overrides["reasoning_effort"]}
+                        route["reasoning_effort"] = safe_overrides["reasoning_effort"]
+                    if "route_label" in safe_overrides:
+                        route["route_label"] = safe_overrides["route_label"]
+                    if "runtime_provider" in safe_overrides:
+                        route["runtime"]["provider"] = safe_overrides["runtime_provider"]
+                    break  # first valid override wins
+            except Exception:
+                pass  # hook is advisory; errors are non-fatal
+
             try:
                 from agent.reasoning_policy import (
                     decide_turn_route,
@@ -3364,6 +3427,41 @@ class GatewayRunner:
                 session_key,
             )
             return True  # handled (silently dropped); do not fall through
+
+        # --- Plugin authorization gate (busy path) ---
+        # Control commands bypass the busy path at the adapter level (Level 1
+        # guard), so no bypass check is needed here.  Fail-closed: when hooks
+        # are registered and none explicitly allow, deny.
+        try:
+            from hermes_cli.plugins import (
+                has_hook as _has_hook_busy,
+                invoke_hook as _invoke_auth_hook_busy,
+            )
+            if _has_hook_busy("pre_gateway_authorize_message"):
+                _auth_busy_results = _invoke_auth_hook_busy(
+                    "pre_gateway_authorize_message",
+                    event=event,
+                    gateway=self,
+                    source=event.source,
+                )
+                if not any(
+                    isinstance(r, dict) and r.get("allow")
+                    for r in _auth_busy_results
+                ):
+                    logger.info(
+                        "pre_gateway_authorize_message denied (busy path): "
+                        "user=%s platform=%s session=%s",
+                        event.source.user_id,
+                        event.source.platform.value if event.source.platform else "unknown",
+                        session_key,
+                    )
+                    return True
+        except Exception as _auth_busy_exc:
+            logger.warning(
+                "pre_gateway_authorize_message busy-path failed: %s",
+                _auth_busy_exc,
+            )
+            return True  # fail-closed on hook error
 
         # --- Draining case (gateway restarting/stopping) ---
         if self._draining:
@@ -7236,7 +7334,55 @@ class GatewayRunner:
                     # Record rate limit so subsequent messages are silently ignored
                     self.pairing_store._record_rate_limit(platform_name, source.user_id)
             return None
-        
+
+        # --- Plugin authorization gate (pre_gateway_authorize_message) ---
+        # Fires after the core _is_user_authorized check for non-internal,
+        # non-control-command messages.  Control commands that bypass the
+        # active-session guard at the adapter level must also bypass this
+        # hook so /stop, /approve, /deny etc. always reach the runner.
+        # Fail-closed: when at least one hook callback is registered, the
+        # message is denied unless a callback explicitly returns
+        # {"allow": True}.  When no callbacks are registered, default
+        # (allow) behaviour is preserved.
+        if not is_internal:
+            _cmd = event.get_command()
+            _AUTH_HOOK_BYPASS = frozenset({
+                "stop", "new", "reset", "approve", "deny",
+                "status", "queue", "q", "background", "restart",
+            })
+            if _cmd not in _AUTH_HOOK_BYPASS:
+                try:
+                    from hermes_cli.plugins import (
+                        has_hook as _has_hook,
+                        invoke_hook as _invoke_auth_hook,
+                    )
+                    if _has_hook("pre_gateway_authorize_message"):
+                        _auth_results = _invoke_auth_hook(
+                            "pre_gateway_authorize_message",
+                            event=event,
+                            gateway=self,
+                            source=source,
+                        )
+                        _auth_allowed = any(
+                            isinstance(r, dict) and r.get("allow")
+                            for r in _auth_results
+                        )
+                        if not _auth_allowed:
+                            logger.info(
+                                "pre_gateway_authorize_message denied: "
+                                "user=%s platform=%s chat=%s",
+                                source.user_id,
+                                source.platform.value if source.platform else "unknown",
+                                source.chat_id or "unknown",
+                            )
+                            return None
+                except Exception as _auth_exc:
+                    logger.warning(
+                        "pre_gateway_authorize_message invocation failed: %s",
+                        _auth_exc,
+                    )
+                    return None  # fail-closed on hook error
+
         # Intercept messages that are responses to a pending /update prompt.
         # The update process (detached) wrote .update_prompt.json; the watcher
         # forwarded it to the user; now the user's reply goes back via
@@ -9324,23 +9470,57 @@ class GatewayRunner:
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
                 _response_ref = "r-" + secrets.token_hex(4)
-                _footer_line = _bfl(
-                    user_config=_load_gateway_config(),
-                    platform_key=_platform_config_key(source.platform),
-                    model=agent_result.get("model"),
-                    context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
-                    context_length=agent_result.get("context_length") or None,
-                    cwd=os.environ.get("TERMINAL_CWD", ""),
-                    provider=agent_result.get("provider"),
-                    reasoning_effort=agent_result.get("reasoning_effort"),
-                    route_label=agent_result.get("route_label"),
-                    codex_quota_used_percent=(
-                        self._get_codex_quota_used_percent()
-                        if str(agent_result.get("provider") or "").strip().lower() in {"openai-codex", "codex"}
-                        else None
-                    ),
-                    response_ref=_response_ref,
-                )
+
+                # Fire format_gateway_runtime_footer hook BEFORE the default
+                # builder.  First non-empty string from a callback replaces
+                # the default footer.  Hook never blocks response delivery.
+                try:
+                    from hermes_cli.plugins import invoke_hook as _invoke_footer_hook
+                    _hook_footer_results = _invoke_footer_hook(
+                        "format_gateway_runtime_footer",
+                        model=agent_result.get("model"),
+                        context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
+                        context_length=agent_result.get("context_length") or None,
+                        cwd=os.environ.get("TERMINAL_CWD", ""),
+                        provider=agent_result.get("provider"),
+                        reasoning_effort=agent_result.get("reasoning_effort"),
+                        route_label=agent_result.get("route_label"),
+                        codex_quota_used_percent=(
+                            self._get_codex_quota_used_percent()
+                            if str(agent_result.get("provider") or "").strip().lower() in {"openai-codex", "codex"}
+                            else None
+                        ),
+                        response_ref=_response_ref,
+                        platform_key=_platform_config_key(source.platform),
+                        user_config=_load_gateway_config(),
+                    )
+                    _plugin_footer = next(
+                        (r for r in _hook_footer_results if isinstance(r, str) and r.strip()),
+                        None,
+                    )
+                except Exception:
+                    _plugin_footer = None
+
+                if _plugin_footer:
+                    _footer_line = _plugin_footer
+                else:
+                    _footer_line = _bfl(
+                        user_config=_load_gateway_config(),
+                        platform_key=_platform_config_key(source.platform),
+                        model=agent_result.get("model"),
+                        context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
+                        context_length=agent_result.get("context_length") or None,
+                        cwd=os.environ.get("TERMINAL_CWD", ""),
+                        provider=agent_result.get("provider"),
+                        reasoning_effort=agent_result.get("reasoning_effort"),
+                        route_label=agent_result.get("route_label"),
+                        codex_quota_used_percent=(
+                            self._get_codex_quota_used_percent()
+                            if str(agent_result.get("provider") or "").strip().lower() in {"openai-codex", "codex"}
+                            else None
+                        ),
+                        response_ref=_response_ref,
+                    )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
                 _footer_line = ""
@@ -9550,6 +9730,8 @@ class GatewayRunner:
             # message and record the mapping.  Best-effort — failures are
             # logged but never block the turn.
             if _response_ref and self._session_db and response:
+                _row = None
+                _ref_created = False
                 try:
                     _row = self._session_db.get_last_assistant_message(
                         session_entry.session_id,
@@ -9560,8 +9742,27 @@ class GatewayRunner:
                             message_id=_row["id"],
                             ref_id=_response_ref,
                         )
+                        _ref_created = True
                 except Exception as _ref_err:
                     logger.debug("response_ref persist failed: %s", _ref_err)
+
+                # Fire on_final_response_persisted notification hook only after
+                # the assistant row and response-ref mapping both exist.
+                # Pure notification — never blocks response delivery.
+                if _ref_created and _row and _response_ref:
+                    try:
+                        from hermes_cli.plugins import invoke_hook as _invoke_persisted_hook
+                        _invoke_persisted_hook(
+                            "on_final_response_persisted",
+                            session_id=session_entry.session_id,
+                            message_id=_row["id"],
+                            ref_id=_response_ref,
+                            platform=source.platform.value if source.platform else "",
+                            chat_id=source.chat_id or "",
+                            session_key=session_key,
+                        )
+                    except Exception:
+                        pass  # notification-only hook; errors are non-fatal
 
             # Token counts and model are now persisted by the agent directly.
             # Keep only last_prompt_tokens here for context-window tracking and

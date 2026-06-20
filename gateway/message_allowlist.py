@@ -59,14 +59,17 @@ def _message_allowlist_block() -> dict[str, Any]:
     return dict(block) if isinstance(block, Mapping) else {}
 
 
-def message_allowlist_configured() -> bool:
-    """Return True when a global message allowlist is configured and enabled."""
+def message_allowlist_enabled() -> bool:
+    """Return True when the global message allowlist block is enabled."""
     block = _message_allowlist_block()
-    if not block:
+    return bool(block) and block.get("enabled", True) is not False
+
+
+def message_allowlist_configured() -> bool:
+    """Return True when a global message allowlist has enabled members."""
+    if not message_allowlist_enabled():
         return False
-    if block.get("enabled", True) is False:
-        return False
-    members = block.get("members", {})
+    members = _message_allowlist_block().get("members", {})
     return isinstance(members, Mapping) and bool(members)
 
 

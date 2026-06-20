@@ -164,6 +164,57 @@ VALID_HOOKS: Set[str] = {
     #   choice: "once" | "session" | "always" | "deny" | "timeout"
     "pre_approval_request",
     "post_approval_response",
+    # --- Gateway pluginization hooks (2026-06-20) ---
+    # Gateway message authorization gate.  Fired in BOTH the cold path
+    # (_handle_message) and the busy path (_handle_active_session_busy_message)
+    # AFTER pre_gateway_dispatch.  Fail-closed: when allowlist enforcement is
+    # enabled and at least one callback is registered, the message is denied
+    # unless a callback explicitly returns {"allow": True}.
+    # Kwargs: event: MessageEvent, gateway: GatewayRunner, source: SessionSource
+    # Return: {"allow": True, "reason": "..."} or {"deny": True, "reason": "..."}
+    #   or None/empty (treated as deny when callbacks exist).
+    # Contract: control commands (/stop, /new, /approve, /deny, /queue, /status)
+    # bypass this hook by the caller before the hook fires.
+    "pre_gateway_authorize_message",
+    # Runtime footer formatting hook.  Fires when the final response metadata
+    # is available, BEFORE the default footer builder runs.  Plugins may return
+    # a string to replace the footer, or None/empty to use default behavior.
+    # First non-empty string wins.
+    # Kwargs: model: str, context_tokens: int, context_length: int|None,
+    #   cwd: str, provider: str, reasoning_effort: str, route_label: str,
+    #   codex_quota_used_percent: float|None, response_ref: str|None,
+    #   platform_key: str|None, user_config: dict
+    # Return: str (footer text) or None (use default).
+    # Contract: must never block response delivery.  Empty return = no footer.
+    # Cache-safe: does not mutate messages, history, toolsets, or system prompt.
+    "format_gateway_runtime_footer",
+    # Response-ref persistence hook.  Fires AFTER the assistant DB row and
+    # response-ref mapping exist.  Pure notification — return values ignored.
+    # Kwargs: session_id: str, message_id: int, ref_id: str,
+    #   platform: str, chat_id: str, session_key: str
+    # Contract: must never block response delivery.  Hook exceptions are
+    # logged and swallowed.
+    "on_final_response_persisted",
+    # Turn route decision hook.  Fires BEFORE agent construction for a turn
+    # when adaptive routing is enabled and the session has no forced reasoning
+    # override.  Plugins may return a dict to override routing parameters.
+    # Kwargs: user_message: str, primary_provider: str, primary_model: str,
+    #   session_key: str, policy: dict
+    # Return: {"provider": str, "model": str, "reasoning_effort": str,
+    #   "route_label": str, "runtime_provider": str} or None (use default).
+    # Contract: CACHE-SAFE — only explicit turn inputs are passed.  The caller
+    # ignores dangerous returned keys: messages, history, tools, toolsets,
+    # system, memory.  Explicit session reasoning overrides always outrank
+    # this hook.
+    "resolve_turn_route",
+    # Status event transformation hook (declared for future use).
+    # NOT fired in the current codebase.  Declared so plugin manifests can
+    # reference it without import errors.  When live, it will fire before
+    # user-visible status delivery.
+    # Kwargs: kind: str, message: str, surface: str, session_key: str,
+    #   is_terminal: bool, attempt: int
+    # Return: {"suppress": True} or {"rewrite": "..."} or None (keep original).
+    "transform_status_event",
 }
 
 ENTRY_POINTS_GROUP = "hermes_agent.plugins"
@@ -1567,6 +1618,16 @@ class PluginManager:
                 )
         return results
 
+    def has_hook(self, hook_name: str) -> bool:
+        """Return True when at least one callback is registered for *hook_name*.
+
+        Unlike ``invoke_hook``, this does NOT execute any callbacks.  It is
+        intended for fail-closed security call sites that need to distinguish
+        "no hook registered" (allow default) from "hook registered but raised"
+        (deny) versus "hook registered and explicitly allowed."
+        """
+        return bool(self._hooks.get(hook_name))
+
     # -----------------------------------------------------------------------
     # Introspection
     # -----------------------------------------------------------------------
@@ -1645,6 +1706,14 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
     Returns a list of non-``None`` return values from plugin callbacks.
     """
     return get_plugin_manager().invoke_hook(hook_name, **kwargs)
+
+
+def has_hook(hook_name: str) -> bool:
+    """Return True when at least one callback is registered for *hook_name*.
+
+    Module-level convenience wrapper around ``PluginManager.has_hook``.
+    """
+    return get_plugin_manager().has_hook(hook_name)
 
 
 
