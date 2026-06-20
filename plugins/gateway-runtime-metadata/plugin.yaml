@@ -1,0 +1,5 @@
+name: gateway-runtime-metadata
+version: 1.0.0
+description: "Gateway runtime footer and response-reference lookup as a bundled plugin."
+author: Hermes Agent
+kind: standalone

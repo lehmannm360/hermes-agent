@@ -203,6 +203,11 @@ Plugins can register callbacks for these lifecycle events. See the **[Event Hook
 | [`on_session_reset`](/user-guide/features/hooks#on_session_reset) | Gateway swaps in a new session key (`/new`, `/reset`, `/clear`, idle rotation) |
 | [`subagent_stop`](/user-guide/features/hooks#subagent_stop) | Once per child after `delegate_task` finishes |
 | [`pre_gateway_dispatch`](/user-guide/features/hooks#pre_gateway_dispatch) | Gateway received a user message, before auth + dispatch. Return `{"action": "skip" \| "rewrite" \| "allow", ...}` to influence flow. |
+| [`pre_gateway_authorize_message`](/user-guide/features/hooks#pre_gateway_authorize_message) | Gateway authorization gate for inbound messages; fail-closed when allowlist enforcement is enabled. |
+| [`format_gateway_runtime_footer`](/user-guide/features/hooks#format_gateway_runtime_footer) | Gateway runtime footer formatting before final delivery. |
+| [`on_final_response_persisted`](/user-guide/features/hooks#on_final_response_persisted) | Gateway assistant row and response reference have been persisted. |
+| [`resolve_turn_route`](/user-guide/features/hooks#resolve_turn_route) | Gateway model/provider/reasoning route resolution for the next turn; cache-safe route overrides only. |
+| [`transform_status_event`](/user-guide/features/hooks#transform_status_event) | Declared for future gateway status-event filtering; not fired yet. |
 
 ## Plugin types
 

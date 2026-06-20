@@ -63,6 +63,11 @@ The repo ships these bundled plugins under `plugins/`. All are opt-in — enable
 | `image_gen/openai` | image backend | OpenAI `gpt-image-2` image generation backend (alternative to FAL) |
 | `image_gen/openai-codex` | image backend | OpenAI image generation via Codex OAuth |
 | `image_gen/xai` | image backend | xAI `grok-2-image` backend |
+| `account-usage` | CLI + quota service | Codex account usage/quota inspection and quota snapshot registration for gateway runtime consumers |
+| `gateway-runtime-metadata` | hooks + CLI | Runtime footer hook integration and response-reference lookup; response-ref persistence remains core-owned |
+| `message-allowlist` | authorization hook + CLI | Cross-platform message allowlist diagnostics and fail-closed gateway authorization when enforcement is enabled |
+| `adaptive-routing` | routing hook + CLI | Cache-safe route diagnostics and MiMo/Codex/DeepSeek adaptive routing policy integration |
+| `gateway-noiseless-failover` | policy + CLI | Quiet fallback/status policy diagnostics; policy-only until `transform_status_event` is live-fired |
 | `hermes-achievements` | dashboard tab | Steam-style collectible badges generated from your real Hermes session history |
 | `kanban/dashboard` | dashboard tab | Kanban board UI for the multi-agent dispatcher — tasks, comments, fan-out, board switching. See [Kanban Multi-Agent](./kanban.md). |
 
@@ -192,6 +197,76 @@ Hermes-prefixed and standard SDK env vars (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECR
 **Performance:** the Langfuse client is cached after the first hook call. If credentials or SDK are missing, that decision is also cached — subsequent hooks fast-return without re-checking env vars or reloading config.
 
 **Disabling:** `hermes plugins disable observability/langfuse`. The plugin module is still discovered, but no module code runs until you re-enable.
+
+### account_usage
+
+Codex account usage and quota inspection. The plugin owns Codex usage fetching, parsing, rendering, and the `account-usage` operator CLI surface. It is intentionally Codex-only; Anthropic account usage is not supported for Hermes.
+
+The plugin also registers quota fetch/render callbacks with the core `gateway.quota_service` seam. Gateway runtime footer and adaptive routing callers use that seam instead of importing the plugin directly. If the plugin is disabled, absent, or errors, quota snapshots degrade to unavailable rather than blocking gateway responses.
+
+**Enabling:** `hermes plugins enable account-usage`.
+
+**Disabling again:** `hermes plugins disable account-usage`. Gateway footer/routing quota display falls back to unavailable/empty quota data.
+
+### gateway-runtime-metadata
+
+Runtime footer and response-reference operator surfaces.
+
+**How it works:**
+
+| Hook / surface | Behaviour |
+|---|---|
+| `format_gateway_runtime_footer` | Lets a plugin return a footer string or defer to the core footer builder. |
+| `on_final_response_persisted` | Fires after the assistant database row and response-reference mapping exist. Return values are ignored. |
+| `hermes response-ref <ref>` | Looks up a response reference in the session database. |
+
+Response-ref creation, persistence ordering, pruning/cascade behavior, and response delivery remain core-owned. Hook exceptions never block final response delivery.
+
+**Enabling:** `hermes plugins enable gateway-runtime-metadata`.
+
+**Disabling again:** `hermes plugins disable gateway-runtime-metadata`; core footer and response-ref behavior remain available.
+
+### message-allowlist
+
+Cross-platform message allowlist policy and diagnostics. The plugin registers the `pre_gateway_authorize_message` hook and checks inbound gateway messages against `security.message_allowlist`.
+
+**Security behavior:**
+
+- If `security.message_allowlist` is absent or disabled, the plugin explicitly allows so enabling the plugin alone does not activate enforcement.
+- If allowlist enforcement is enabled, messages are denied unless a hook callback explicitly allows them.
+- Hook errors fail closed while enforcement is enabled.
+- Control/approval commands that must reach the gateway runner (`/stop`, `/new`, `/queue`, `/status`, `/approve`, `/deny`) bypass before the hook fires.
+
+**Enabling:** `hermes plugins enable message-allowlist`.
+
+**Disabling again:** `hermes plugins disable message-allowlist`; gateway authorization falls back to core/default behavior.
+
+### adaptive-routing
+
+Cache-safe routing policy for model/provider/reasoning selection. The plugin registers `resolve_turn_route` and delegates to the shared `agent.reasoning_policy` policy code so plugin and core behavior remain aligned.
+
+**Invariants:**
+
+- The hook receives explicit turn inputs only.
+- Returned keys that could mutate messages, history, tools, toolsets, system prompts, or memory are ignored by the gateway.
+- Explicit `/reasoning` session overrides and forced reasoning config always outrank plugin route decisions.
+- Quota snapshots are read through `gateway.quota_service` and degrade to quota-unavailable routing if account usage is disabled.
+
+**Enabling:** `hermes plugins enable adaptive-routing`.
+
+**Disabling again:** `hermes plugins disable adaptive-routing`; configured provider/model defaults and core routing behavior remain.
+
+### gateway-noiseless-failover
+
+Quiet fallback/status visibility policy diagnostics. This plugin is currently **policy-only**.
+
+It ships pure policy tables and the `noiseless-failover` CLI diagnostic command, but it does not register a live status-transform callback because `transform_status_event` is declared but not fired in the current codebase.
+
+Terminal failures, auth failures, billing failures, missing fallback providers, and content-policy blocks remain visible through the core status path.
+
+**Enabling:** `hermes plugins enable gateway-noiseless-failover`.
+
+**Disabling again:** `hermes plugins disable gateway-noiseless-failover`; status visibility is unchanged because the plugin is policy-only.
 
 ### google_meet
 
