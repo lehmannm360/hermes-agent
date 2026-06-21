@@ -1,12 +1,12 @@
-# Codex Account Usage Plugin As-Built Validation Plan
+# Codex Account Usage Plugin As-Built Validation Record
 
-> **For Hermes:** This document was reviewed and revised for the 2026-06-20 migration workflow. The account usage plugin implementation is already complete and active in this checkout/fork. Treat this file as an as-built validation, rollback, and upstream-update checklist for the pilot rather than a greenfield implementation plan.
+> **For Hermes:** This document was reviewed and revised for the 2026-06-20 migration workflow. The account usage plugin implementation is complete and active in this checkout/fork. Treat this file as an as-built validation, rollback, and upstream-update reference for the pilot rather than a greenfield implementation plan.
 
 > **Validation update, 2026-06-20:** The implementation has passed QA in this checkout. The earlier focused account-usage run passed **48/48**, and account usage also passed in the broader pluginization QA run. The final targeted implementation QA run for steps 1-9 passed **399 tests, 0 failed, across 15 files**.
 
 > **Upstream integration update, 2026-06-20:** PR #4 merged latest NousResearch upstream into the private fork and kept the account-usage plugin path healthy. Final synced local/remote `main` is `3d3f55992`; integration merge commit was `1ae1434f7`; upstream commit was `5a53e0f0f`; post-integration targeted validation passed **408 tests, 0 failed**.
 
-**Goal:** Validate and maintain the bundled Codex account usage plugin as the first pluginized private-fork customization, while keeping the pilot merge-safe and useful as a reference for future plugin-first migrations.
+**Purpose:** Validate and maintain the bundled Codex account usage plugin as the first pluginized private-fork customization, while keeping the pilot merge-safe and useful as a reference for future plugin-first migrations.
 
 **Current architecture:**
 The active feature lives in the bundled plugin package `plugins/account_usage/`. The operator command remains named `account-usage`, but the Python package and repository directory use the import-safe underscore form. The plugin owns Codex usage fetching, parsing, rendering, and plugin CLI registration. The completed follow-up pluginization work adds `gateway/quota_service.py` as the generic quota/account snapshot seam, so hot gateway footer/routing code no longer needs to import `plugins.account_usage` directly.
@@ -19,15 +19,15 @@ Python, Hermes bundled plugin system, `httpx`, existing Codex auth helpers, and 
 
 ---
 
-## Plan Summary
+## Reference summary
 
 This is the as-built record for the account usage plugin pilot.
 
-The original plan was to move Codex account usage improvements out of core ownership and into a bundled plugin. That migration is now implemented. This revised plan no longer asks implementers to scaffold, move, or wire the feature from scratch. Instead, it documents what is live, how to validate it, how to keep it merge-safe during upstream updates, and how to roll back without touching credentials.
+The original implementation plan moved Codex account usage improvements out of core ownership and into a bundled plugin. That migration is implemented. This reference no longer asks implementers to scaffold, move, or wire the feature from scratch. Instead, it documents what is live, how to validate it, how to keep it merge-safe during upstream updates, and how to roll back without touching credentials.
 
-The pilot originally accepted minimal live core wiring. The 2026-06-20 pluginization follow-up keeps that wiring thin and moves runtime quota access behind the generic quota service seam. This differs from the Compiled Memory Architecture plan, which remains out of scope for this session.
+The pilot originally accepted minimal live core wiring. The 2026-06-20 pluginization follow-up keeps that wiring thin and moves runtime quota access behind the generic quota service seam. This differs from the Compiled Memory Architecture plan, which remains out of scope for this record.
 
-The completed PR #4 upstream merge confirms the pilot's intended maintenance shape: account usage remained plugin-owned, while runtime quota consumption stayed behind `gateway/quota_service.py`. Future upstream work should follow `docs/plans/2026-06-20 Upstream Update Playbook.md` for merge rehearsal, semantic seam checks, and targeted validation.
+The completed PR #4 upstream merge confirms the pilot's intended maintenance shape: account usage remained plugin-owned, while runtime quota consumption stayed behind `gateway/quota_service.py`. Future upstream work should follow `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md` for merge rehearsal, semantic seam checks, and targeted validation.
 
 ## Non-goals
 
@@ -35,8 +35,8 @@ The completed PR #4 upstream merge confirms the pilot's intended maintenance sha
 - Do **not** add Anthropic support back into this feature; Anthropic account usage is confirmed unsupported for Hermes and is intentionally out of scope.
 - Do **not** change unrelated routing, footer, or gateway formatting behavior.
 - Do **not** expand gateway/routing patches heavily to compensate for missing plugin discovery seams.
-- Do **not** upload repository documentation to Drive as part of this plan.
-- Do **not** treat the 399-test pluginization QA run as Compiled Memory Architecture validation; that feature remains out of scope.
+- Do **not** upload repository documentation to Drive as part of this record.
+- Do **not** treat the 399-test pluginization QA run as Compiled Memory Architecture validation; that feature remains out of scope and remains governed by `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`.
 
 ## Existing behavior to preserve
 
@@ -175,7 +175,7 @@ scripts/run_tests.sh tests/gateway/test_runtime_footer.py -v
 
 Expected result: footer/routing consumers tolerate available, unavailable, and disabled quota snapshots without breaking normal gateway responses.
 
-### 7. Confirm quota service degradation
+### 6. Confirm quota service degradation
 
 When account-usage, footer, or routing code changes, validate that `gateway/quota_service.py` returns safe empty results when no fetcher/renderer is registered and swallows provider errors.
 
@@ -187,9 +187,9 @@ scripts/run_tests.sh tests/test_quota_service.py -v
 
 Expected result: disabled or failing quota providers never block gateway responses or routing decisions.
 
-### 6. Confirm manual inventory gate
+### 7. Confirm manual inventory gate
 
-If the feature inventory changes, update the repository manual at `docs/manual/2026-06-20 Hermes Active Customized Features.md` in a separate documentation change. This is a repo-relative manual update gate only. Do not upload Drive copies and do not use `drive get` as part of this plan.
+If the feature inventory changes, update the repository manual at `docs/manual/2026-06-20 Hermes Active Customized Features.md` in a separate documentation change. This is a repo-relative manual update gate only. Do not upload Drive copies and do not use `drive get` as part of this record.
 
 ## Pre-upstream-update safety checks
 
@@ -266,7 +266,7 @@ scripts/run_tests.sh tests/gateway/test_usage_command.py tests/test_account_usag
 
 Expected result: the gateway still responds, account usage fallback behavior is understandable, and credential state remains untouched.
 
-## Acceptance and maintenance criteria
+## Maintenance criteria
 
 The pilot remains healthy when all applicable criteria are true:
 
@@ -289,7 +289,7 @@ The pilot remains healthy when all applicable criteria are true:
 - [x] Final targeted implementation QA for steps 1-9 passed 399 tests, 0 failed, across 15 files.
 - [x] Post-upstream PR #4 targeted validation passed 408 tests, 0 failed.
 
-## Suggested maintenance workflow
+## Maintenance workflow
 
 1. Review the feature diff against the private-fork `BASE` for actual account-usage changes.
 2. Check retired upstream mirror paths with `git diff --quiet "$UPSTREAM_REMOTE/main" -- <path>` only when they are expected to be clean.
@@ -301,7 +301,7 @@ The pilot remains healthy when all applicable criteria are true:
 
 ## Notes
 
-- Keep secrets out of the plan and out of validation output.
+- Keep secrets out of this record and out of validation output.
 - Keep credential changes untouched during validation and rollback.
 - Keep the plugin bundled and merge-safe.
 - Prefer small, reversible changes.

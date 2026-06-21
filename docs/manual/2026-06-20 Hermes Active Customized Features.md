@@ -1,7 +1,7 @@
 # Hermes Active Customized Features — 20-06-2026
 
 Generated: 20-06-2026 16:30 MYT
-Repository: `/Users/lehmann/.hermes/hermes-agent`
+Repository: this private-fork checkout (relative to workspace root)
 Upstream comparison: `upstream/main` or the configured NousResearch remote
 Private fork push remote: configured private-fork remote for `lehmannm360/hermes-agent` (for example `agent` in earlier notes, or `origin` in this checkout)
 Latest upstream integration: PR #4, merged after integration commit `1ae1434f7` brought in NousResearch upstream `5a53e0f0f`; final synced local/remote `main` is `3d3f55992`.
@@ -12,18 +12,18 @@ This document lists the active private-fork customizations currently present in 
 
 Implementation and QA status as of the pluginization update:
 
-- Steps 1-9 of the remaining active-feature pluginization work are implemented and ready for documentation/user review.
+- Steps 1-9 of the remaining active-feature pluginization work are implemented and documented as completed reference material.
 - Final targeted implementation QA passed **399 tests, 0 failed, across 15 files**.
 - The earlier focused account-usage run passed **48/48**, and account usage also passed in the broader QA run.
 - The upstream integration PR #4 completed successfully: final `main` is `3d3f55992`, integration merge commit was `1ae1434f7`, upstream merged commit was `5a53e0f0f`, and post-integration QA passed **408 tests, 0 failed** across targeted upstream/plugin/custom-feature validation.
 - Compiled Memory Architecture is intentionally excluded from this update and remains governed by its separate plan.
 
-Future upstream-update guidance is maintained in `docs/plans/2026-06-20 Upstream Update Playbook.md`. Use that playbook before the next upstream sync instead of relying on the stale changed-file snapshot that this document used to carry.
+Future upstream-update guidance is maintained in `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md`. Use that playbook before the next upstream sync instead of relying on the stale changed-file snapshot that this document used to carry.
 
 Current private-fork delta handling:
 
 - Do not treat old changed-file lists as canonical after an upstream merge. They go stale as soon as upstream refactors or the private fork lands pluginization work.
-- Recompute the active private-fork delta from git when needed. The recommended commands and review checklist live in `docs/plans/2026-06-20 Upstream Update Playbook.md`.
+- Recompute the active private-fork delta from git when needed. The recommended commands and review checklist live in `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md`.
 - Use the feature descriptions below as the maintained source of truth for active custom behavior.
 - Main touched areas: generic plugin hooks, quota service seam, gateway runtime/footer, message allowlist, adaptive routing, noiseless-failover policy, Codex account usage plugin, config, install scripts, tests.
 
@@ -80,7 +80,7 @@ Merge risk:
 
 - Medium, because the policy is now behind a generic hook seam, but it still touches turn routing and `hermes_cli/config.py`.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Implemented through `resolve_turn_route`. Explicit `/reasoning` session overrides and `force_reasoning_config` remain core-owned and stronger than plugin decisions.
 
@@ -112,7 +112,7 @@ Merge risk:
 
 - Medium, because fallback paths are central and likely to evolve upstream.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Partially implemented as a policy-only bundled plugin. Live suppression remains intentionally deferred until a safe `transform_status_event` fire site exists.
 
@@ -148,7 +148,7 @@ Merge risk:
 
 - Low-medium.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Best first pilot. This is small, read-only, and now lives in a bundled plugin rather than core agent code.
 
@@ -186,7 +186,7 @@ Merge risk:
 
 - Medium-high, because it touches gateway send/session/storage paths.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Implemented partially. The plugin owns operator surfaces and hook callbacks; core still owns row/ref creation, persistence ordering, pruning/cascade behavior, and delivery safety.
 
@@ -238,7 +238,7 @@ Merge risk:
 
 - Medium-high, because it is security-sensitive and gateway-entry-path-sensitive.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Implemented through `pre_gateway_authorize_message`. Plugin-disabled behavior falls back to core authorization.
 
@@ -265,7 +265,7 @@ Merge risk:
 
 - Medium, due to gateway entry path coupling.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Implemented as a retained core invariant plus the message-allowlist plugin policy hook.
 
@@ -290,7 +290,7 @@ Merge risk:
 
 - Medium, because it lives in the session and turn-routing path.
 
-Plugin migration candidate:
+Pluginization state:
 
 - Not plugin-owned. `resolve_turn_route` exists, but the hook contract explicitly keeps forced/session reasoning overrides stronger than plugin decisions.
 
@@ -313,7 +313,7 @@ Merge risk:
 
 - Low-medium, because install scripts change upstream occasionally.
 
-Plugin migration candidate:
+Pluginization state:
 
 - No. Installer behavior is not plugin-shaped.
 
@@ -326,8 +326,8 @@ Plugin migration candidate:
 Status: planned, not implemented
 Current plan location:
 
-- Local: `~/.hermes/docs/plans/2026-06-01-compiled-memory-architecture-implementation-plan.md`
-- Drive: `Docs/Plan/2026-06-01 Compiled Memory Architecture Implementation Plan.md`
+- Repository: `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`
+- Drive reference, if maintained separately: `Docs/Plan/2026-06-01 Compiled Memory Architecture Implementation Plan.md`
 
 Planned architecture:
 
@@ -342,7 +342,7 @@ Why it matters:
 
 ## Plugin migration priority
 
-Recommended order:
+Completed pluginization sequence:
 
 1. `account-usage` plugin pilot — ✅ implemented/wired; focused QA passed 48/48.
 2. Runtime footer helper/lookup plugin — ✅ implemented as `plugins/gateway-runtime-metadata/`; storage remains core-owned.
@@ -421,4 +421,4 @@ BASE=$(git rev-parse HEAD)
 git diff --name-only "$BASE"...HEAD
 ```
 
-When reviewing the recomputed list, map files back to the active-feature inventory above and to the playbook in `docs/plans/2026-06-20 Upstream Update Playbook.md`. Pay special attention to semantic moves in gateway authorization, response persistence/session semantics, plugin discovery, config migrations, and GitHub workflow files.
+When reviewing the recomputed list, map files back to the active-feature inventory above and to the playbook in `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md`. Pay special attention to semantic moves in gateway authorization, response persistence/session semantics, plugin discovery, config migrations, and GitHub workflow files.

@@ -4,7 +4,7 @@
 **Last validated merge:** PR #4, final `main` at `3d3f55992`.
 **Integration commit:** `1ae1434f7`, merging NousResearch upstream `5a53e0f0f`.
 **Validation result:** 408 tests passed, 0 failed across targeted upstream/plugin/custom-feature validation.
-**Related records:** `docs/manual/2026-06-20 Hermes Active Customized Features.md`, `docs/plans/2026-06-20 Remaining Custom Features Pluginization Plan.md`, `docs/plans/2026-06-01 Account Usage Plugin Implementation Plan.md`.
+**Related records:** `docs/manual/2026-06-20 Hermes Active Customized Features.md`, `docs/manual/2026-06-20 Custom Features Pluginization Architecture Record.md`, `docs/manual/2026-06-01 Codex Account Usage Plugin As-Built Validation Record.md`, `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`.
 
 ## Purpose
 
@@ -65,8 +65,9 @@ The goal is not to avoid all conflicts. The goal is to make conflicts predictabl
 6. Read the active customization inventory before conflict work:
 
    - `docs/manual/2026-06-20 Hermes Active Customized Features.md`
-   - `docs/plans/2026-06-20 Remaining Custom Features Pluginization Plan.md`
-   - `docs/plans/2026-06-01 Account Usage Plugin Implementation Plan.md`
+   - `docs/manual/2026-06-20 Custom Features Pluginization Architecture Record.md`
+   - `docs/manual/2026-06-01 Codex Account Usage Plugin As-Built Validation Record.md`
+   - `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`
 
 ## Branch and PR workflow
 
@@ -270,4 +271,4 @@ Upstream integration update, YYYY-MM-DD:
 - Push/auth pitfalls: <none or details>
 ```
 
-Keep this playbook operational and concise. Move feature-specific architecture details back to the feature plans rather than expanding this file into a general design document.
+Keep this playbook operational and concise. Move feature-specific architecture details back to the relevant manual record or active plan rather than expanding this file into a general design document.

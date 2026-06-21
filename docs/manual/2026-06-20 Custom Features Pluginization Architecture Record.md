@@ -1,23 +1,23 @@
-# Remaining Customized Features Pluginization Plan — 20-06-2026
+# Custom Features Pluginization Architecture Record — 20-06-2026
 
-**Status:** Steps 1-9 implemented, upstream integration completed through PR #4, and documentation updated for future update playbook use.
-**Scope:** Remaining active private-fork customizations after the completed `account-usage` plugin pilot, excluding Compiled Memory Architecture implementation.
+**Status:** Pluginization implementation completed, upstream integration completed through PR #4, and documentation converted to manual/reference form after the documentation playbook update.
+**Scope:** Active private-fork customizations after the completed `account-usage` plugin pilot, excluding Compiled Memory Architecture implementation.
 **Source inventory:** `docs/manual/2026-06-20 Hermes Active Customized Features.md`.
 **Sequencing context:** `docs/plans/2026-06-01 Compiled Memory Architecture Implementation Plan.md`.
-**Archived precedent:** `docs/plans/2026-06-01 Account Usage Plugin Implementation Plan.md` is implemented and retained as the as-built validation record.
-**Future update playbook:** `docs/plans/2026-06-20 Upstream Update Playbook.md`.
+**Archived precedent:** `docs/manual/2026-06-01 Codex Account Usage Plugin As-Built Validation Record.md` is implemented and retained as the as-built validation record.
+**Future update playbook:** `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md`.
 
-> **QA status, 2026-06-20:** Implementation QA is complete and ready for documentation/user review. The final targeted implementation run passed **399 tests, 0 failed, across 15 files**. The earlier focused account-usage run passed **48/48**, and the account-usage implementation also passed in the broader QA run. Anthropic account usage is confirmed unsupported for Hermes and is not part of this migration scope.
+> **QA status, 2026-06-20:** Implementation QA is complete. The final targeted implementation run passed **399 tests, 0 failed, across 15 files**. The earlier focused account-usage run passed **48/48**, and the account-usage implementation also passed in the broader QA run. Anthropic account usage is confirmed unsupported for Hermes and is not part of this migration scope.
 
 > **Upstream integration update, 2026-06-20:** PR #4 merged latest NousResearch upstream into this private fork. Final synced local/remote `main` is `3d3f55992`; the integration merge commit before PR merge was `1ae1434f7`; the upstream commit merged was `5a53e0f0f`. Post-integration targeted validation passed **408 tests, 0 failed** across upstream/plugin/custom-feature checks.
 
-> **Compiled Memory note:** Compiled Memory Architecture remains out of scope for this session. This document preserves it only as a sequencing reference and does not update its implementation plan.
+> **Compiled Memory note:** Compiled Memory Architecture remains out of scope for this completed pluginization record. This document preserves it only as a sequencing reference and does not update its implementation plan.
 
-## 1. Goal
+## 1. Purpose
 
-Reduce private-fork merge risk before updating from the configured NousResearch upstream remote by moving active Hermes customizations behind bundled plugins where existing extension seams are sufficient, and by isolating unavoidable core work into tiny, generic, upstream-compatible hook seams.
+This record documents how private-fork merge risk was reduced before updating from the configured NousResearch upstream remote. Active Hermes customizations moved behind bundled plugins where existing extension seams were sufficient, and unavoidable core work was isolated into tiny, generic, upstream-compatible hook seams.
 
-PR #4 is the first completed validation of that goal after the pluginization work. The merge succeeded, but it exposed an important update pitfall: upstream extracted authorization behavior into `gateway/authz_mixin.py`, so message-allowlist/auth seams had to be re-injected there rather than only in `gateway/run.py`. Future update work should treat this document as the migration design record and use `docs/plans/2026-06-20 Upstream Update Playbook.md` as the step-by-step operational checklist.
+PR #4 is the first completed validation of that goal after the pluginization work. The merge succeeded, but it exposed an important update pitfall: upstream extracted authorization behavior into `gateway/authz_mixin.py`, so message-allowlist/auth seams had to be re-injected there rather than only in `gateway/run.py`. Future update work should treat this document as the migration design record and use `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md` as the step-by-step operational checklist.
 
 The migration target was not “every customization becomes a plugin immediately.” The implemented target is:
 
@@ -114,7 +114,7 @@ Core ownership retained:
 - the persisted hook fires after the row/ref exists and never blocks delivery;
 - trailing footer send behavior remains preserved in the gateway path.
 
-Acceptance criteria:
+Validation criteria:
 
 - plugin-disabled mode leaves normal gateway responses intact;
 - footer output matches current tests for model/context/cwd/route/quota/response-ref fields;
@@ -141,7 +141,7 @@ Security invariants:
 - fail-closed applies only when allowlist enforcement is enabled and hook callbacks do not explicitly allow;
 - disabled or absent plugin falls back to core authorization behavior.
 
-Acceptance criteria:
+Validation criteria:
 
 - unauthorized users cannot inject into cold sessions or active busy sessions;
 - configured owners can still use `/stop`, `/new`, `/queue`, `/status`, `/approve`, `/deny`, and `/reset` where those commands are supported;
@@ -169,7 +169,7 @@ Cache-safety and precedence invariants:
 
 Cross-plugin dependency: quota-aware routing depends on Codex usage quota snapshots owned by the `plugins/account_usage/` plugin. The as-built route/footer paths do not directly import `plugins.account_usage` from hot gateway code; they use the generic `gateway/quota_service.py` seam instead.
 
-Acceptance criteria:
+Validation criteria:
 
 - explicit `/reasoning` session overrides always take precedence over adaptive routing;
 - prompt-cache invariants remain intact because routing changes only future request parameters, not past messages or toolsets;
@@ -195,7 +195,7 @@ Deferred invariant:
 - terminal failures, auth failures, billing failures, missing fallback provider, and content-policy blocks remain visible through core behavior;
 - plugin-disabled mode is equivalent to current/default status visibility because the plugin is policy-only.
 
-Acceptance criteria:
+Validation criteria:
 
 - successful automatic fallback does not spam gateway users;
 - final failures, auth failures, billing failures, missing fallback provider, and content-policy blocks remain visible;
@@ -213,7 +213,7 @@ Keep these out of plugin packages unless a future hook makes them naturally plug
 - live status-event suppression: not implemented; `transform_status_event` is declaration-only;
 - installer/update behavior cleanup: small private patch or upstream contribution candidate.
 
-## 6. Recommended migration sequence
+## 6. Implementation sequence record
 
 ```mermaid
 flowchart TD
@@ -230,7 +230,9 @@ flowchart TD
     B --> J[Preserve Compiled Memory out of scope]
 ```
 
-### Phase 0 — Baseline and safety gate
+### Phase 0 — Baseline and safety gate — completed
+
+The baseline process used this safety gate before extraction and upstream merge work:
 
 1. Commit or stash unrelated work.
 2. Record the private-fork branch base:
@@ -239,8 +241,8 @@ flowchart TD
    BASE=$(git rev-parse HEAD)
    ```
 
-3. Capture current changed paths against the configured upstream remote branch for awareness, but do not use that upstream branch as the feature-diff base for new plugin work.
-4. Run the current targeted tests for active customizations:
+3. Capture current changed paths against the configured upstream remote branch for awareness, but do not use that upstream branch as the feature-diff base for plugin work.
+4. Run the targeted tests for active customizations:
 
    ```bash
    scripts/run_tests.sh \
@@ -361,11 +363,11 @@ Completed steps:
 2. Made `resolve_turn_route` contract state that `force_reasoning_config` and explicit session overrides take precedence over plugin decisions.
 3. Kept the hook gated so forced/session reasoning overrides outrank plugin decisions.
 
-### Phase 7 — Installer/update cleanup
+### Phase 7 — Installer/update cleanup — retained outside pluginization
 
-Keep this outside the plugin program.
+This remains outside the plugin program because installer behavior is not plugin-shaped.
 
-Steps:
+Maintenance checks:
 
 1. Recheck installer diff after the upstream update.
 2. Drop local changes if upstream has equivalent behavior.
@@ -374,7 +376,7 @@ Steps:
 
 ### Phase 8 — Compiled Memory Architecture remains out of scope
 
-The active-feature inventory lists account usage as done and Compiled Memory as a separate major plugin-first feature. This documentation update does not change the Compiled Memory Architecture plan or implementation status.
+The active-feature inventory lists account usage as done and Compiled Memory as a separate major plugin-first feature. This architecture record does not change the Compiled Memory Architecture plan or implementation status.
 
 Rule:
 
@@ -382,7 +384,7 @@ Rule:
 
 ### Phase 9 — Upstream update rehearsal — implementation QA complete
 
-Before updating the working private fork from upstream, rehearse with the smallest possible custom delta.
+Before the completed upstream update, the working private fork was rehearsed with the smallest possible custom delta.
 
 Final targeted implementation QA result:
 
@@ -441,7 +443,7 @@ Conflict and resolution record:
 - `website/docs/user-guide/features/hooks.md` required documentation conflict handling;
 - GitHub remote push required a token with `workflow` scope because upstream changed `.github/workflows/build-windows-installer.yml`.
 
-This phase is now closed. Future upstream work should start from `docs/plans/2026-06-20 Upstream Update Playbook.md`.
+This phase is now closed. Future upstream work should start from `docs/manual/2026-06-20 Hermes Private Fork Upstream Update Playbook.md`.
 
 ## 7. Feature-to-test map
 
@@ -457,7 +459,7 @@ This phase is now closed. Future upstream work should start from `docs/plans/202
 | Upstream PR #4 integration | Targeted upstream/plugin/custom-feature validation through `scripts/run_tests.sh` | 408 passed, 0 failed after merging upstream `5a53e0f0f` |
 | Installer cleanup | Not part of this implementation | Not validated by this pluginization QA run |
 
-## 8. Acceptance criteria for the overall migration program
+## 8. Completed-state criteria for the migration program
 
 - The account usage as-built plan remains stable after the 2026-06-20 status update, except for maintenance notes that clarify validation state, rollback guidance, or unsupported provider scope.
 - Every remaining customization is classified as pluginized, declaration-only/deferred, core-invariant, or non-plugin-shaped.
@@ -516,9 +518,9 @@ scripts/run_tests.sh \
 | Semantic seam loss after upstream refactors | Audit moved call sites after every merge. PR #4 moved authorization into `gateway/authz_mixin.py`, so auth/message-allowlist seams had to be restored there even when the old `gateway/run.py` mental model looked familiar |
 | GitHub push blocked by workflow changes | If upstream changes `.github/workflows/**`, GitHub may reject pushes unless the token has `workflow` scope; fix credentials rather than rewriting or dropping upstream workflow changes |
 
-## 11. When to split into separate plans
+## 11. Boundary with active plans and future work
 
-Keep this file as the umbrella migration plan. Create a separate per-feature plan when any of these become true:
+This file is now an architecture record, not the umbrella plan for new implementation work. Create a separate future plan only when any of these become true:
 
 - a new hook is ready to be proposed or implemented;
 - a phase touches more than a small plugin package plus tests;
@@ -526,7 +528,7 @@ Keep this file as the umbrella migration plan. Create a separate per-feature pla
 - routing behavior changes live model/provider selection;
 - acceptance requires end-to-end gateway validation beyond focused unit tests.
 
-Recommended future sub-plans:
+Potential future plan topics:
 
 1. Gateway Runtime Metadata Plugin Plan.
 2. Gateway Authorization Hook and Message Allowlist Plugin Plan.
