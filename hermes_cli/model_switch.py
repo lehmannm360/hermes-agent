@@ -2092,6 +2092,16 @@ def list_authenticated_providers(
     # Sort: current provider first, then by model count descending
     results.sort(key=lambda r: (not r["is_current"], -r["total_models"]))
 
+
+    # Filter out hidden providers from config
+    try:
+        from hermes_cli.config import load_config
+        _cfg = load_config()
+        _hidden = set(_cfg.get("hidden_providers", []))
+        if _hidden:
+            results = [r for r in results if r["slug"] not in _hidden]
+    except Exception:
+        pass
     return results
 
 

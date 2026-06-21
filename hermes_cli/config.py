@@ -883,6 +883,7 @@ def _ensure_hermes_home_managed(home: Path):
 DEFAULT_CONFIG = {
     "model": "",
     "providers": {},
+    "hidden_providers": [],  # Providers to hide from the /model picker (e.g. ["xiaomi", "copilot"])
     "fallback_providers": [],
     "credential_pool_strategies": {},
     "toolsets": ["hermes-cli"],
