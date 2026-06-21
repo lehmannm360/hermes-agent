@@ -145,7 +145,10 @@ def _route_reasoning_label(
         return ""
     label = str(route_label or "").strip()
     provider_norm = str(provider or "").strip().lower()
-    if not label:
+    # Handle manifest route_label: use model name with m- prefix
+    if route_label == "manifest":
+        label = f"m-{_model_short(model)}" if _model_short(model) else "m-manifest"
+    elif not label:
         if provider_norm in {"openai-codex", "codex"}:
             label = "codex"
         elif provider_norm == "deepseek":
@@ -184,11 +187,15 @@ def format_runtime_footer(
     partially-populated footer is better than a line with ``?%`` or empty slots.
     """
     parts: list[str] = []
+    _route_reasoning_produced = False
     for field in fields:
         if field == "model":
-            m = _model_short(model)
-            if m:
-                parts.append(m)
+            # Defer to route_reasoning which embeds the model name.
+            # If route_reasoning isn't in fields at all, show model directly.
+            if "route_reasoning" not in fields:
+                short = _model_short(model)
+                if short:
+                    parts.append(short)
         elif field == "context_pct":
             if context_length and context_length > 0 and context_tokens >= 0:
                 pct = max(0, min(100, round((context_tokens / context_length) * 100)))
@@ -207,11 +214,20 @@ def format_runtime_footer(
             )
             if rr:
                 parts.append(rr)
+                _route_reasoning_produced = True
         elif field == "response_ref":
             ref = str(response_ref or "").strip()
             if ref:
                 parts.append(ref)
         # Unknown field names are silently ignored.
+
+    # Fallback: when route_reasoning is in fields but had no data (e.g. no
+    # reasoning_effort configured), show model as a standalone field so the
+    # footer isn't reduced to just response_ref.
+    if "route_reasoning" in fields and not _route_reasoning_produced:
+        short = _model_short(model)
+        if short:
+            parts.insert(0, short)
 
     if not parts:
         return ""

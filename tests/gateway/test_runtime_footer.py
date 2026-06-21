@@ -360,3 +360,37 @@ def test_build_footer_no_data_returns_empty_even_when_enabled():
     # With no TERMINAL_CWD env either
     if not os.environ.get("TERMINAL_CWD"):
         assert out == ""
+
+
+def test_format_footer_model_fallback_when_route_reasoning_empty():
+    """When route_reasoning is in fields but has no data (no reasoning_effort),
+    model should appear as a standalone fallback."""
+    out = format_runtime_footer(
+        model="openai/gpt-5.4",
+        provider="manifest",
+        reasoning_effort=None,  # not configured → route_reasoning returns ""
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+        fields=("model", "route_reasoning", "response_ref"),
+        response_ref="r-abc123",
+    )
+    # model appears as fallback, route_reasoning skipped, response_ref appended
+    assert out == "gpt-5.4 · r-abc123"
+
+
+def test_format_footer_no_duplicate_model_when_route_reasoning_works():
+    """When route_reasoning produces output, model should NOT appear separately."""
+    out = format_runtime_footer(
+        model="gpt-5.5",
+        provider="openai-codex",
+        reasoning_effort="xhigh",
+        route_label="codex",
+        context_tokens=0,
+        context_length=None,
+        cwd="",
+        fields=("model", "route_reasoning", "response_ref"),
+        response_ref="r-abc123",
+    )
+    # "model" field is skipped when route_reasoning produces output
+    assert out == "codex | xhigh · r-abc123"
