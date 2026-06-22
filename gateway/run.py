@@ -3558,9 +3558,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception:
                 pass  # hook is advisory; errors are non-fatal
 
-            # If plugin hook already routed, skip core adaptive routing to avoid clobbering
-            if not _route_hook_overridden:
-              try:
+            try:
                 from agent.reasoning_policy import (
                     decide_turn_route,
                     fallback_chain_for_profile,
@@ -3616,7 +3614,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         route["runtime"] = self._runtime_dict_from_kwargs(runtime_kwargs)
                         route["signature"] = self._route_signature(model, route["runtime"])
                         route["route_label"] = "codex" if is_codex_provider(route["runtime"].get("provider")) else None
-              except Exception as exc:
+            except Exception as exc:
                 logger.debug("Adaptive reasoning policy skipped: %s", exc)
 
         service_tier = getattr(self, "_service_tier", None)
