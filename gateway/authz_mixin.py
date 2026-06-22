@@ -317,14 +317,23 @@ class GatewayAuthorizationMixin:
         # named member (e.g. `esa`) carry Telegram, WhatsApp, Signal, etc. IDs
         # plus role/permission metadata without duplicating env allowlists.
         try:
-            from gateway.message_allowlist import message_allowlist_authorizes
+            from gateway.message_allowlist import (
+                message_allowlist_authorizes,
+                message_allowlist_enabled,
+            )
 
             if message_allowlist_authorizes(source):
                 return True
+
+            # If message-allowlist plugin is enabled, skip env-var checks.
+            # The plugin hook (pre_gateway_authorize_message) handles auth;
+            # core env-var allowlists are redundant when the plugin is active.
+            if message_allowlist_enabled():
+                return False  # defer to plugin hook or default-deny
         except Exception as exc:
             logger.warning("Failed to evaluate security.message_allowlist: %s", exc)
 
-        # Check platform-specific and global allowlists
+        # Check platform-specific and global allowlists (env vars)
         platform_allowlist = os.getenv(platform_env_map.get(source.platform, ""), "").strip()
         group_user_allowlist = ""
         group_chat_allowlist = ""
