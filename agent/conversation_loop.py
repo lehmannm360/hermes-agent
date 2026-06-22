@@ -1178,7 +1178,16 @@ def run_conversation(
                     # Log response with provider info if available
                     resp_model = getattr(response, 'model', 'N/A') if response else 'N/A'
                     logging.debug(f"API Response received - Model: {resp_model}, Usage: {response.usage if hasattr(response, 'usage') else 'N/A'}")
-                
+
+                # Capture the actual model name from the API response.
+                # Providers like Manifest.build route model=auto to a specific
+                # model (e.g. mimo-v2.5-pro) and report it in response.model.
+                # Storing it on the agent lets the gateway footer display the
+                # real model instead of the config placeholder.
+                _resp_model_name = getattr(response, 'model', None) if response else None
+                if _resp_model_name:
+                    agent._last_response_model = _resp_model_name
+
                 # Validate response shape before proceeding
                 response_invalid = False
                 error_details = []
@@ -3635,6 +3644,8 @@ def run_conversation(
                     )
                     _assistant_text = assistant_message.content or ""
                     _api_ended_at = api_start_time + api_duration
+                    # Capture actual model for footer display (Manifest returns routed model)
+                    agent._last_response_model = getattr(response, "model", None) or None
                     _invoke_hook(
                         "post_api_request",
                         task_id=effective_task_id,
@@ -3652,7 +3663,7 @@ def run_conversation(
                         ended_at=_api_ended_at,
                         finish_reason=finish_reason,
                         message_count=len(api_messages),
-                        response_model=getattr(response, "model", None),
+                        response_model=(getattr(response, "model", None) or None),
                         response=agent._api_response_payload_for_hook(
                             response,
                             assistant_message,

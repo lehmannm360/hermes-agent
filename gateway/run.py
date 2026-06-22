@@ -3500,7 +3500,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             route["reasoning_config"] = dict(reasoning_config)
 
         policy = self._load_reasoning_policy()
-        if bool(policy.get("enabled")) and not force_reasoning_config:
+        _provider_at_check = runtime.get("provider")
+        _base_url_at_check = runtime.get("base_url", "")
+        _is_manifest = "manifest.build" in str(_base_url_at_check) or _provider_at_check == "manifest"
+        logger.info("Adaptive routing check: provider=%s, base_url=%s, is_manifest=%s", _provider_at_check, _base_url_at_check, _is_manifest)
+        if _is_manifest:
+            # Manifest handles its own routing — skip adaptive policy and tag for footer
+            route["route_label"] = "manifest"
+        elif bool(policy.get("enabled")) and not force_reasoning_config:
             # Fire resolve_turn_route hook — cache-safe: only explicit turn
             # inputs are passed, not mutable messages/history/toolsets/system.
             # Dangerous returned keys are ignored.  Session overrides outrank
@@ -16235,6 +16242,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _output_toks = getattr(_agent, "session_completion_tokens", 0)
                 _context_length = getattr(_agent.context_compressor, "context_length", 0) or 0
             _resolved_model = getattr(_agent, "model", None) if _agent else None
+            # For providers like Manifest.build that route model=auto internally,
+            # the API response carries the actual model name. Use it for display
+            # (footer) but keep _resolved_model for routing comparison below.
+            _display_model = getattr(_agent, "_last_response_model", None) if _agent else None
+            _display_model = _display_model or _resolved_model
             _resolved_provider = getattr(_agent, "provider", None) if _agent else turn_route.get("runtime", {}).get("provider")
             _resolved_reasoning_effort = None
             if isinstance(effective_reasoning_config, dict):
@@ -16443,7 +16455,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "last_prompt_tokens": _last_prompt_toks,
                 "input_tokens": _input_toks,
                 "output_tokens": _output_toks,
-                "model": _resolved_model,
+                "model": _display_model,
                 "provider": _resolved_provider,
                 "reasoning_effort": _resolved_reasoning_effort,
                 "route_label": _resolved_route_label,
