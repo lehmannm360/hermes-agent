@@ -141,14 +141,17 @@ def _route_reasoning_label(
     codex_quota_used_percent: Any = None,
 ) -> str:
     effort = str(reasoning_effort or "").strip().lower()
-    if not effort:
-        return ""
     label = str(route_label or "").strip()
     provider_norm = str(provider or "").strip().lower()
-    # Handle manifest route_label: use model name with m- prefix
+    # Handle manifest route_label: use model name with m- prefix.
+    # Manifest routes may not carry reasoning_effort, so check this
+    # BEFORE the early-return on empty effort.
     if route_label == "manifest":
         label = f"m-{_model_short(model)}" if _model_short(model) else "m-manifest"
-    elif not label:
+        return label if label and label != "m-" else ""
+    if not effort:
+        return ""
+    if not label:
         if provider_norm in {"openai-codex", "codex"}:
             label = "codex"
         elif provider_norm == "deepseek":
