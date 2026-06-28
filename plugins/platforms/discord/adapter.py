@@ -6306,57 +6306,11 @@ def _define_discord_view_classes() -> None:
             select.callback = self._on_provider_selected
             self.add_item(select)
 
-            auto_btn = discord.ui.Button(
-                label="✨ Auto (adaptive)",
-                style=discord.ButtonStyle.success,
-                custom_id="model_auto",
-            )
-            auto_btn.callback = self._on_auto
-            self.add_item(auto_btn)
-
             cancel_btn = discord.ui.Button(
                 label="Cancel", style=discord.ButtonStyle.red, custom_id="model_cancel"
             )
             cancel_btn.callback = self._on_cancel
             self.add_item(cancel_btn)
-
-        async def _on_auto(self, interaction: discord.Interaction):
-            """Return the session to adaptive routing via the shared
-            ``on_model_selected`` closure (sentinel ``__auto__``)."""
-            if self.resolved:
-                await interaction.response.send_message(
-                    "Already resolved~", ephemeral=True
-                )
-                return
-            if not self._check_auth(interaction):
-                await interaction.response.send_message(
-                    "You're not authorized~", ephemeral=True
-                )
-                return
-            self.resolved = True
-            self.clear_items()
-            await interaction.response.edit_message(
-                embed=discord.Embed(
-                    title="⚙ Returning to Adaptive Routing",
-                    description="Clearing the manual model lock...",
-                    color=discord.Color.green(),
-                ),
-                view=None,
-            )
-            try:
-                result_text = await self.on_model_selected(
-                    str(interaction.channel_id), "auto", "__auto__"
-                )
-            except Exception as exc:
-                result_text = f"Error returning to adaptive routing: {exc}"
-            await interaction.edit_original_response(
-                embed=discord.Embed(
-                    title="⚙ Adaptive Routing",
-                    description=result_text,
-                    color=discord.Color.green(),
-                ),
-                view=None,
-            )
 
         def _build_model_select(self, provider_slug: str):
             """Build the model dropdown for a specific provider."""

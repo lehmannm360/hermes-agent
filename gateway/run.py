@@ -3701,23 +3701,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             tuple(runtime.get("args") or []),
         )
 
-    def _lookup_manual_lock(self, session_key: str) -> Optional[Dict[str, str]]:
-        """Return the per-session manual model lock for *session_key*, if any.
-
-        The lock is installed by ``/model <name>`` (and the interactive
-        pickers) so an explicit user selection outranks adaptive routing.
-        The adaptive-routing plugin's ``resolve_turn_route`` hook honors
-        the same dict, but the gateway must NOT depend on the plugin being
-        enabled (``kind: standalone`` is opt-in via ``plugins.enabled``) to
-        respect an explicit selection — so this lookup is the authoritative
-        seam, used both as a fallback when the hook is absent and as the
-        source of the ``route_source='manual'`` tag when the hook wins.
-        """
-        _lock_map = getattr(self, "_session_model_lock", None)
-        if not isinstance(_lock_map, dict):
-            return None
-        return _lock_map.get(str(session_key or ""))
-
     def _resolve_turn_agent_config(
         self,
         user_message: str,
@@ -3853,41 +3836,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # overrides below.
                 _skip_core_routing = True
             else:
-                # No plugin final decision (plugin not enabled, returned
-                # advisory, or returned None).  Honor a per-session manual
-                # model lock here regardless of whether the
-                # adaptive-routing plugin is loaded — an explicit
-                # ``/model <name>`` selection must outrank core
-                # ``decide_turn_route()``.  Without this, a user who
-                # manually selects a model sees it silently overwritten by
-                # adaptive routing on the next turn whenever the plugin is
-                # not opted into via ``plugins.enabled``.
-                _manual_lock = self._lookup_manual_lock(_session_key_for_route)
-                if _manual_lock:
-                    _pin_model = _manual_lock.get("model") or model
-                    _pin_provider = _manual_lock.get("provider") or runtime.get("provider")
-                    try:
-                        from hermes_cli.runtime_provider import (
-                            resolve_runtime_provider as _rrp,
-                        )
-                        runtime = self._runtime_dict_from_kwargs(
-                            _rrp(requested=_pin_provider, target_model=_pin_model)
-                        )
-                    except Exception:
-                        runtime = dict(runtime)
-                        runtime["provider"] = _pin_provider
-                    route["model"] = _pin_model
-                    route["runtime"] = runtime
-                    route["signature"] = self._route_signature(_pin_model, runtime)
-                    route["route_source"] = "manual"
-                    route["route_label"] = "manual"
-                    _effort = str(_manual_lock.get("reasoning_effort") or "medium")
-                    route["reasoning_config"] = {"effort": _effort}
-                    route["reasoning_effort"] = _effort
-                    route["route_hook_final"] = True
-                    _skip_core_routing = True
-                else:
-                    _skip_core_routing = False
+                _skip_core_routing = False
 
             if not _skip_core_routing:
                 try:

@@ -1245,17 +1245,6 @@ class GatewaySlashCommandsMixin:
                         _chat_id: str, model_id: str, provider_slug: str
                     ) -> str:
                         """Perform the model switch and return confirmation text."""
-                        # ``/model auto`` affordance inside the interactive
-                        # picker: adapters send a sentinel (provider_slug
-                        # ``__auto__`` or model_id ``auto``) when the user
-                        # taps the Auto/adaptive button.  Route to the
-                        # auto-routing flow instead of trying to switch to a
-                        # model literally named "auto".
-                        if (
-                            str(provider_slug or "").lower() == "__auto__"
-                            or str(model_id or "").strip().lower() == "auto"
-                        ):
-                            return await _self._handle_model_auto_routing(event)
                         skew_error = _model_switch_skew_guard()
                         if skew_error:
                             return skew_error

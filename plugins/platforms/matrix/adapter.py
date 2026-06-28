@@ -2016,11 +2016,6 @@ class MatrixAdapter(BasePlatformAdapter):
             "React to choose a model:",
         ]
         choices: dict[str, tuple[str, str]] = {}
-        # Auto/adaptive routing affordance.  The sentinel provider_slug
-        # ``__auto__`` routes to ``_handle_model_auto_routing`` via the
-        # shared on_model_selected closure, clearing the manual lock.
-        choices["✨"] = ("auto", "__auto__")
-        lines.append("✨ `auto` — Auto (adaptive routing)")
         for emoji, model_id, provider_slug, provider_name in flat_choices:
             choices[emoji] = (model_id, provider_slug)
             lines.append(f"{emoji} `{model_id}` — {provider_name}")
