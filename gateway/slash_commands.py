@@ -183,6 +183,14 @@ class GatewaySlashCommandsMixin:
         # picks up configured defaults instead of previous session switches.
         self._session_model_overrides.pop(session_key, None)
         self._set_session_reasoning_override(session_key, None)
+        # Clear any adaptive-routing manual lock so the next turn
+        # returns to adaptive routing instead of staying pinned to a
+        # previously selected model.
+        try:
+            from plugins import adaptive_routing as _ar_plugin
+            _ar_plugin.clear_manual_lock(session_key)
+        except Exception:
+            logger.debug("adaptive-routing lock clear on /new skipped", exc_info=True)
         if hasattr(self, "_pending_model_notes"):
             self._pending_model_notes.pop(session_key, None)
 
@@ -1113,6 +1121,10 @@ class GatewaySlashCommandsMixin:
           /model <name> --global              — switch and persist (explicit)
           /model <name> --provider <provider> — switch provider + model
           /model --provider <provider>        — switch to provider, auto-detect model
+          /model auto                         — return the session to adaptive routing
+                                                (clears the manual model lock and the
+                                                session-scoped model override; equivalent
+                                                to the previous /routing auto command)
         """
         from gateway.run import _hermes_home, _load_gateway_config
         import yaml
@@ -1135,6 +1147,14 @@ class GatewaySlashCommandsMixin:
             is_session,
         ) = parse_model_flags(raw_args)
         persist_global = resolve_persist_behavior(is_global_flag, is_session)
+
+        # ``/model auto`` — return the session to adaptive routing.  This
+        # replaces the previous /routing auto command: clear the per-session
+        # manual lock, drop the session model override, and evict the cached
+        # agent so the next turn re-runs the adaptive-routing hook with no
+        # pin in place.
+        if model_input and model_input.strip().lower() == "auto":
+            return await self._handle_model_auto_routing(event)
 
         # --refresh: bust the disk cache so the picker shows live data.
         if force_refresh:
@@ -1331,6 +1351,22 @@ class GatewaySlashCommandsMixin:
                             "base_url": result.base_url,
                             "api_mode": result.api_mode,
                         }
+
+                        # Manual model selection installs a session-level
+                        # routing lock so the adaptive-routing plugin /
+                        # core decide_turn_route() cannot overwrite it
+                        # on the next turn.  Cleared by /model auto,
+                        # /new, /reset, or session finalization.
+                        try:
+                            from plugins import adaptive_routing as _ar_plugin
+                            _ar_plugin.set_manual_lock(
+                                _session_key,
+                                model=result.new_model,
+                                provider=result.target_provider,
+                                source="picker",
+                            )
+                        except Exception:
+                            logger.debug("adaptive-routing lock install skipped (picker)", exc_info=True)
 
                         # Evict cached agent so the next turn creates a fresh
                         # agent from the override rather than relying on the
@@ -1566,6 +1602,22 @@ class GatewaySlashCommandsMixin:
                 "api_mode": result.api_mode,
             }
 
+            # Manual model selection installs a session-level routing
+            # lock so the adaptive-routing plugin / core
+            # decide_turn_route() cannot overwrite it on the next turn.
+            # Cleared by /model auto, /new, /reset, or session
+            # finalization.
+            try:
+                from plugins import adaptive_routing as _ar_plugin
+                _ar_plugin.set_manual_lock(
+                    session_key,
+                    model=result.new_model,
+                    provider=result.target_provider,
+                    source="user",
+                )
+            except Exception:
+                logger.debug("adaptive-routing lock install skipped", exc_info=True)
+
             # Evict cached agent so the next turn creates a fresh agent from the
             # override rather than relying on cache signature mismatch detection.
             self._evict_cached_agent(session_key)
@@ -1703,6 +1755,60 @@ class GatewaySlashCommandsMixin:
             )
 
         return await _finish_switch()
+
+    async def _handle_model_auto_routing(self, event: MessageEvent) -> str:
+        """Handle ``/model auto`` — return the session to adaptive routing.
+
+        Clears the per-session manual model lock, drops the session-scoped
+        model override, and evicts the cached agent so the next turn runs
+        the adaptive-routing plugin hook with no pin in place.  Equivalent
+        to the previous ``/routing auto`` command.
+        """
+        # Normalize the source the same way a normal message turn does
+        # (Telegram DM topic recovery) so the override key matches the key
+        # the next message turn reads (#30479).
+        source = self._normalize_source_for_session_key(event.source)
+        session_key = self._session_key_for_source(source)
+
+        # Did the session have a manual lock?  ``pop`` is safe on either
+        # the gateway's ``_session_model_lock`` dict (always present) or
+        # a partial stub dict in tests.
+        had_lock = False
+        try:
+            had_lock = self._session_model_lock.pop(session_key, None) is not None
+        except Exception:
+            had_lock = False
+
+        # Also ask the plugin to clear its lock — the gateway and the
+        # plugin share the same dict, but the plugin owns the canonical
+        # clear API so future refactors of the lock storage (e.g. a
+        # profile-scoped persistent store) go through the plugin seam.
+        try:
+            from plugins import adaptive_routing as _ar_plugin
+            cleared = _ar_plugin.clear_manual_lock(session_key)
+            if cleared:
+                had_lock = True
+        except Exception:
+            logger.debug("adaptive-routing lock clear on /model auto failed", exc_info=True)
+
+        # Drop the session model override so the next turn rebuilds from
+        # the configured default (otherwise the override would still pin
+        # the route to the previously-selected model).
+        try:
+            self._session_model_overrides.pop(session_key, None)
+        except Exception:
+            pass
+
+        # Evict the cached agent so the next turn creates a fresh one
+        # rather than reusing the model-pinned cached one.
+        try:
+            self._evict_cached_agent(session_key)
+        except Exception:
+            logger.debug("evict on /model auto failed", exc_info=True)
+
+        if had_lock:
+            return t("gateway.model.auto_cleared")
+        return t("gateway.model.auto_noop")
 
     async def _handle_codex_runtime_command(self, event: MessageEvent) -> str:
         """Handle /codex-runtime command in the gateway.

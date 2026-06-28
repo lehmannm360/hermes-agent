@@ -41,6 +41,10 @@ gateway:
     usage_switch_model:     "`/model <name>` — モデルを切り替え"
     usage_switch_provider:  "`/model <name> --provider <slug>` — プロバイダーを切り替え"
     usage_persist:          "`/model <name> --global` — 永続化"
+    # /model auto — return the session to adaptive routing. Replaces the
+    # previous /routing auto command.
+    auto_cleared:           "Routing: 🔄 returned to auto (adaptive) — manual lock cleared"
+    auto_noop:              "Routing: ⚡ already on auto (no manual lock to clear)"
 
   agents:
     header:                "🤖 **アクティブなエージェントとタスク**"

@@ -45,6 +45,10 @@ gateway:
     usage_switch_model:     "`/model <name>` — athraigh an tsamhail"
     usage_switch_provider:  "`/model <name> --provider <slug>` — athraigh an soláthraí"
     usage_persist:          "`/model <name> --global` — coinnigh"
+    # /model auto — return the session to adaptive routing. Replaces the
+    # previous /routing auto command.
+    auto_cleared:           "Routing: 🔄 returned to auto (adaptive) — manual lock cleared"
+    auto_noop:              "Routing: ⚡ already on auto (no manual lock to clear)"
 
   agents:
     header:                "🤖 **Gníomhairí & Tascanna Gníomhacha**"

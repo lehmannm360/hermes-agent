@@ -139,16 +139,11 @@ def _route_reasoning_label(
     reasoning_effort: Optional[str],
     route_label: Optional[str],
     codex_quota_used_percent: Any = None,
+    route_source: Optional[str] = None,
 ) -> str:
     effort = str(reasoning_effort or "").strip().lower()
     label = str(route_label or "").strip()
     provider_norm = str(provider or "").strip().lower()
-    # Handle manifest route_label: use model name with m- prefix.
-    # Manifest routes may not carry reasoning_effort, so check this
-    # BEFORE the early-return on empty effort.
-    if route_label == "manifest":
-        label = f"m-{_model_short(model)}" if _model_short(model) else "m-manifest"
-        return label if label and label != "m-" else ""
     if not effort:
         return ""
     if not label:
@@ -164,11 +159,35 @@ def _route_reasoning_label(
     if provider_norm in {"openai-codex", "codex"} and "mini" in _model_short(model).lower():
         effort_label = f"mini-{effort}"
     parts = [label, effort_label]
-    if provider_norm in {"openai-codex", "codex"}:
+    # Quota display: only OpenAI OAuth (Codex) exposes a 5-hour rolling
+    # usage in the footer.  PAYG providers (deepseek, etc.) opt out,
+    # and Opencode Go / Opencode Zen do not expose a quota indicator
+    # at all — even if the gateway passes a value, the footer omits
+    # it.  The plugin's quota policy is the source of truth; this
+    # function falls back to a small built-in table so the footer
+    # remains functional even when the plugin is disabled.
+    if _provider_shows_quota_in_footer(provider_norm):
         usage = _format_used_percent(codex_quota_used_percent)
         if usage:
             parts.append(usage)
     return " | ".join(parts)
+
+
+def _provider_shows_quota_in_footer(provider_norm: str) -> bool:
+    """True when the provider's quota usage should appear in the footer.
+
+    The footer exposes a 5-hour rolling usage for OpenAI OAuth
+    (Codex) only.  PAYG providers (deepseek, etc.) and Opencode Go /
+    Opencode Zen (no quota source today) opt out.  The plugin's
+    quota policy is the source of truth; this function falls back
+    to a small built-in table so the footer remains functional even
+    when the plugin is disabled.
+    """
+    if provider_norm in {"openai-codex", "codex"}:
+        return True
+    if not provider_norm:
+        return False
+    return False
 
 
 def format_runtime_footer(
@@ -183,6 +202,7 @@ def format_runtime_footer(
     route_label: Optional[str] = None,
     codex_quota_used_percent: Any = None,
     response_ref: Optional[str] = None,
+    route_source: Optional[str] = None,
 ) -> str:
     """Render the footer line, or return "" if no fields have data.
 
@@ -214,6 +234,7 @@ def format_runtime_footer(
                 reasoning_effort=reasoning_effort,
                 route_label=route_label,
                 codex_quota_used_percent=codex_quota_used_percent,
+                route_source=route_source,
             )
             if rr:
                 parts.append(rr)
@@ -257,6 +278,7 @@ def build_footer_line(
     route_label: Optional[str] = None,
     codex_quota_used_percent: Any = None,
     response_ref: Optional[str] = None,
+    route_source: Optional[str] = None,
 ) -> str:
     """Top-level entry point used by gateway/run.py.
 
@@ -278,5 +300,6 @@ def build_footer_line(
         route_label=route_label,
         codex_quota_used_percent=codex_quota_used_percent,
         response_ref=response_ref,
+        route_source=route_source,
     )
     return _apply_footer_style(line, cfg.get("style"))
