@@ -278,3 +278,85 @@ class TestTelegramModelPicker:
         assert len(call_log) == 2
         assert call_log[0]["message_thread_id"] == 99999
         assert "message_thread_id" not in call_log[1] or call_log[1]["message_thread_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_provider_keyboard_includes_auto_button(self, monkeypatch):
+        """The top-level provider keyboard must surface an Auto/adaptive
+        affordance (callback_data ``ma``) so ``/model auto`` is visible in
+        the actual model-selection surface, not only in the text fallback.
+        Regression for the ``/model auto`` not-listed-in-picker report."""
+        import plugins.platforms.telegram.adapter as tg
+
+        built: list = []
+
+        class _RecordingButton:
+            def __init__(self, text, callback_data=None, **kw):
+                self.text = text
+                self.callback_data = callback_data
+                built.append(callback_data)
+
+        class _RecordingMarkup:
+            def __init__(self, rows):
+                self.inline_keyboard = rows
+
+        monkeypatch.setattr(tg, "InlineKeyboardButton", _RecordingButton)
+        monkeypatch.setattr(tg, "InlineKeyboardMarkup", _RecordingMarkup)
+
+        adapter = _make_adapter()
+
+        async def mock_send_message(**kwargs):
+            return SimpleNamespace(message_id=101)
+
+        adapter._bot.send_message = AsyncMock(side_effect=mock_send_message)
+
+        providers = [
+            {"slug": "openrouter", "name": "OpenRouter", "total_models": 2, "is_current": True},
+        ]
+
+        await adapter.send_model_picker(
+            chat_id="12345",
+            providers=providers,
+            current_model="m",
+            current_provider="openrouter",
+            session_key="s",
+            on_model_selected=AsyncMock(),
+            metadata=None,
+        )
+
+        # The Auto/adaptive button must be present in the rendered keyboard.
+        assert "ma" in built, f"Auto button (ma) missing from picker keyboard: {built}"
+        # The cancel button is still rendered.
+        assert "mx" in built
+
+    @pytest.mark.asyncio
+    async def test_auto_callback_invokes_auto_sentinel(self):
+        """Tapping the Auto button (``ma``) must call the shared
+        ``on_model_selected`` closure with the ``__auto__`` sentinel, which
+        the closure routes to ``_handle_model_auto_routing``.  The picker
+        state is cleared after the tap."""
+        adapter = _make_adapter()
+        callback = AsyncMock(return_value="Returned to adaptive routing.")
+        adapter._model_picker_state["12345"] = {
+            "providers": [
+                {"slug": "openrouter", "name": "OpenRouter", "total_models": 1, "is_current": True}
+            ],
+            "current_model": "model_1",
+            "current_provider": "openrouter",
+            "session_key": "s",
+            "on_model_selected": callback,
+            "msg_id": 42,
+        }
+
+        query = AsyncMock()
+        query.message = MagicMock()
+        query.message.chat_id = 12345
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        await adapter._handle_model_picker_callback(query, "ma", "12345")
+
+        callback.assert_awaited_once_with("12345", "auto", "__auto__")
+        # The picker message is edited to show the auto-routing confirmation.
+        query.edit_message_text.assert_awaited()
+        # Picker state is cleared after the tap.
+        assert "12345" not in adapter._model_picker_state

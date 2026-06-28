@@ -52,6 +52,12 @@ class _StubRuntime:
             tuple(runtime.get("args") or []),
         )
 
+    def _lookup_manual_lock(self, session_key):
+        """Mirror the gateway's manual-lock lookup against the stub's
+        ``_session_model_lock`` dict (the production method reads the same
+        attribute via getattr)."""
+        return self._session_model_lock.get(str(session_key or ""))
+
     def _load_reasoning_policy(self):
         # Disable core routing for the test by returning an empty policy
         # so the function only exercises the hook block, then either
@@ -349,3 +355,84 @@ class TestResolveTurnAgentConfigNoManifestSpecialCase:
         assert route.get("route_label") != "manifest"
         assert route["route_label"] == "codex"
         assert route["model"] == "gpt-5.5"
+
+
+# ---------------------------------------------------------------------------
+# Manual model lock honored even when the adaptive-routing plugin is NOT
+# loaded (kind: standalone is opt-in via plugins.enabled).  The gateway
+# must not depend on the plugin's resolve_turn_route hook to respect an
+# explicit /model <name> selection — core decide_turn_route() would
+# otherwise overwrite it on the next turn.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTurnAgentConfigManualLockFallback:
+    def test_manual_lock_wins_when_hook_returns_no_final_decision(self):
+        """When the plugin is not enabled (hook returns []), a per-session
+        manual model lock must still pin provider/model and skip core
+        decide_turn_route().  This is the exact path that broke manual
+        model selection before the fix."""
+        from gateway import run as gw_run
+        method = _bind_method(gw_run.GatewayRunner)
+        stub = _StubRuntime()
+        stub._session_model_lock["telegram:12345"] = {
+            "model": "manual-model",
+            "provider": "openai-codex",
+            "source": "user",
+        }
+
+        # Plugin not loaded → hook returns no results.
+        with patch("hermes_cli.plugins.invoke_hook", return_value=[]):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+                route = method(
+                    stub,
+                    user_message="anything — adaptive routing must not override",
+                    model="manual-model",
+                    runtime_kwargs={
+                        "provider": "openai-codex",
+                        "base_url": "https://example.invalid/v1",
+                        "api_key": "x",
+                        "api_mode": "codex_responses",
+                    },
+                    reasoning_config=None,
+                    force_reasoning_config=False,
+                    session_key="telegram:12345",
+                )
+
+        # The manual lock pinned the model; core routing was skipped.
+        assert route["model"] == "manual-model"
+        assert route["runtime"]["provider"] == "openai-codex"
+        assert route.get("route_hook_final") is True
+        assert route.get("route_source") == "manual"
+        assert route.get("route_label") == "manual"
+
+    def test_no_manual_lock_falls_through_to_core_routing(self):
+        """Without a manual lock, the absence of a plugin final decision
+        must still let core decide_turn_route() run (the fallback must
+        not short-circuit normal adaptive routing)."""
+        from gateway import run as gw_run
+        method = _bind_method(gw_run.GatewayRunner)
+        stub = _StubRuntime()
+        # No lock installed.
+
+        with patch("hermes_cli.plugins.invoke_hook", return_value=[]):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+                route = method(
+                    stub,
+                    user_message="hi",
+                    model="mimo-v2.5",
+                    runtime_kwargs={
+                        "provider": "opencode-go",
+                        "base_url": "https://example.invalid/v1",
+                        "api_key": "x",
+                        "api_mode": "chat_completions",
+                    },
+                    reasoning_config=None,
+                    force_reasoning_config=False,
+                    session_key="telegram:12345",
+                )
+
+        # No manual pin → route_hook_final stays unset, core routing ran
+        # and kept the primary model (policy stacks empty → primary wins).
+        assert not route.get("route_hook_final")
+        assert route["model"] == "mimo-v2.5"

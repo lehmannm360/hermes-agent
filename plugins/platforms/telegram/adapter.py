@@ -4084,6 +4084,10 @@ class TelegramAdapter(BasePlatformAdapter):
                 buttons.append(_provider_button(p))
 
         rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+        # Auto/adaptive routing affordance — returns the session to
+        # adaptive routing (clears the manual model lock + override).
+        # ``ma`` callback is handled in _handle_model_picker_callback.
+        rows.insert(0, [InlineKeyboardButton("✨ Auto (adaptive)", callback_data="ma")])
         rows.append([InlineKeyboardButton("✗ Cancel", callback_data="mx")])
         return InlineKeyboardMarkup(rows)
 
@@ -4142,6 +4146,37 @@ class TelegramAdapter(BasePlatformAdapter):
         except ImportError:
             def get_label(slug):
                 return slug
+
+        if data == "ma":
+            # --- Auto/adaptive routing selected: clear the manual lock +
+            # override and return the session to adaptive routing.  The
+            # shared on_model_selected closure detects the sentinel and
+            # routes to _handle_model_auto_routing.
+            callback = state.get("on_model_selected")
+            if not callback:
+                await query.answer(text="Picker expired.")
+                return
+            try:
+                result_text = await callback(chat_id, "auto", "__auto__")
+            except Exception as exc:
+                logger.error("Model picker auto-routing failed: %s", exc)
+                result_text = f"Error returning to adaptive routing: {exc}"
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(result_text),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=None,
+                )
+            except Exception:
+                try:
+                    await query.edit_message_text(
+                        text=result_text, parse_mode=None, reply_markup=None,
+                    )
+                except Exception:
+                    pass
+            await query.answer(text="Returned to adaptive routing.")
+            self._model_picker_state.pop(chat_id, None)
+            return
 
         if data.startswith("mp:"):
             # --- Provider selected: show model buttons (page 0) ---
