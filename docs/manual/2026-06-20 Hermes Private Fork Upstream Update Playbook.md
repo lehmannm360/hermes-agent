@@ -272,3 +272,32 @@ Upstream integration update, YYYY-MM-DD:
 ```
 
 Keep this playbook operational and concise. Move feature-specific architecture details back to the relevant manual record or active plan rather than expanding this file into a general design document.
+
+## Integration records
+
+### Upstream integration update, 2026-06-28
+
+- Integration branch: `update/upstream-2026-06-28` (off private-fork `main` `b6dbbd304`).
+- Integration merge commit: `0abe7b9a4` (private-fork side; merge --no-ff).
+- Upstream commit merged: `135f23516` (NousResearch `hermes-agent` `main`).
+- Private-fork baseline before merge: `b6dbbd304` (pre-merge plan housekeeping commit on `709067b84`).
+- Upstream delta: 1074 commits since previous integration (`3d3f55992`); 1572 files changed; 2 textual conflicts, both resolved.
+- Textual conflicts:
+  - `hermes_cli/plugins.py` — content conflict in `STANDARD_HOOKS`. Private-fork added 5 gateway pluginization hooks (`pre_gateway_authorize_message`, `format_gateway_runtime_footer`, `on_final_response_persisted`, `resolve_turn_route`, `transform_status_event`); upstream added 3 kanban hooks (`kanban_task_claimed`, `kanban_task_completed`, `kanban_task_blocked`). Sets non-overlapping; both kept in the merged `STANDARD_HOOKS`.
+  - `docs/plans/gemini-oauth-provider.md` — rename/delete. Private fork moved the planning doc from `plans/` to `docs/plans/`; upstream deleted the pre-rename copy. Kept the private-fork's `docs/plans/gemini-oauth-provider.md` (no upstream replacement exists).
+- Semantic audit: all 5 private-fork hook fire sites confirmed intact in post-merge `gateway/run.py` (lines 3736, 4944, 8255, 10823, 11163). `gateway/authz_mixin.py`, `gateway/quota_service.py`, `gateway/runtime_footer.py`, `gateway/session.py`, `hermes_state.py` all merged cleanly via upstream — no private-fork seam re-application needed.
+- Test-fix commit on top of merge: `4feb389c5` (`tests/gateway/test_compression_failure_session_sync.py` — updated mock lambda to accept new `reasoning_config` / `force_reasoning_config` kwargs that the upstream `_resolve_turn_agent_config` call site now passes).
+- QA result (subset-level runs, see merge commit `0abe7b9a4` for full commands):
+  - `tests/test_plugin_hooks.py` + `tests/test_quota_service.py` + `tests/test_hermes_state.py` + `tests/gateway/test_runtime_footer.py` + `tests/gateway/test_unauthorized_dm_behavior.py` + `tests/gateway/test_usage_command.py` + `tests/agent/test_reasoning_policy.py`: **412 passed / 0 failed**.
+  - `tests/plugins/account_usage/` + `tests/plugins/adaptive_routing/` + `tests/plugins/gateway_noiseless_failover/` + `tests/plugins/gateway_runtime_metadata/` + `tests/plugins/message_allowlist/` + `tests/test_account_usage.py` + `tests/hermes_cli/test_gateway.py`: **90 passed / 0 failed**.
+  - `tests/hermes_state/` + `tests/agent/test_reasoning_policy.py`: **55 passed / 0 failed**.
+  - `tests/gateway/` full directory sweep: **232 passed / 35 failed** in 20-worker parallel mode. All 35 failures traced to one of two causes:
+    1. **Cross-test pollution in 20-worker parallel mode** — 4 files (`test_bluebubbles.py`, `test_discord_attachment_download.py`, `test_msgraph_webhook.py`, `test_compression_failure_session_sync.py`) pass cleanly when run in isolation. The `test_compression_failure_session_sync.py` failure was a real kwarg-mismatch (fixed in `4feb389c5`); the other 3 are env-bleed artifacts that resolve on isolated runs.
+    2. **Pre-existing upstream issues** — 5 files (`test_matrix.py::test_matrix_markdown_preserves_table_structure`, `test_shutdown_forensics.py`, `test_wecom_callback.py`, `test_background_command.py`, `test_gateway_shutdown.py`) fail in isolation on both this branch AND on a clean clone of `nous-upstream/main` at the same commit. These are not regressions from this merge.
+- Notable conflicts and lessons:
+  - The 1074-commit delta merged in **one conflict pair** because private-fork customization is heavily pluginized under `plugins/adaptive-routing/`, `plugins/account_usage/`, `plugins/message-allowlist/`, `plugins/gateway-noiseless-failover/`, and `plugins/gateway-runtime-metadata/`. The core/gateway files only carry the hook fire sites (small additions) which upstream did not touch, so the merges in `gateway/run.py`, `gateway/authz_mixin.py`, `gateway/quota_service.py`, `gateway/runtime_footer.py`, `gateway/session.py`, and `hermes_state.py` were trivial.
+  - The one true content conflict in `hermes_cli/plugins.py` was a `STANDARD_HOOKS` set-union — exactly the case the pluginization architecture was designed for. Both sets are required for plugin manifests to resolve; merging them is mechanical and safe.
+  - `git diff --check` after the merge shows whitespace warnings (trailing whitespace, new blank line at EOF) only in upstream-touched files — no private-fork files were flagged. Working tree is clean.
+  - Plan housekeeping (the untracked `docs/plans/adaptive-routing-improvement-plan.md` file that started this work) was preserved as a dedicated commit `b6dbbd304` before the merge so the plan's history is reviewable.
+- Plan updates: `docs/plans/adaptive-routing-improvement-plan.md` was updated post-merge to refresh the line-number table (e.g. `gateway/run.py:3472` → `gateway/run.py:3697`, `gateway/run.py:3408` → `gateway/run.py:3625`) and to add a new section §10 documenting the post-merge state, what changed upstream that the plan must respect, and the validation result.
+- Push/auth pitfalls: none. Integration branch is local-only. (Per playbook, private-fork token may need `workflow` scope when the integration branch is pushed because upstream changed `.github/workflows/*` — verify before `git push origin update/upstream-2026-06-28`.)

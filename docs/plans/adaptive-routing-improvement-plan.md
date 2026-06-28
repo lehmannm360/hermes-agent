@@ -1,8 +1,9 @@
 # Adaptive Routing Plugin — Improvement Plan
 
-> **Date:** 2026-06-28
+> **Date:** 2026-06-28 (updated post-merge: 2026-06-28)
 > **Status:** Draft — ready for implementation
 > **Scope:** Significant improvement to the `adaptive-routing` plugin with manual/auto routing support, smarter scoring, and upstream-merge-safe design
+> **Post-merge line numbers:** This plan was written against the pre-merge private-fork tree at `709067b84`. The 2026-06-28 NousResearch upstream integration (commit `0abe7b9a4`, upstream `135f23516`) shifted several symbol locations; corrected line numbers in the table below refer to the **post-merge** branch `update/upstream-2026-06-28`. All architectural intent and ownership boundaries still hold.
 
 ---
 
@@ -26,21 +27,27 @@ The plugin is a thin hook-and-CLI wrapper around `agent/reasoning_policy.py`.
 
 ### What Exists
 
-| Component | Location | Behavior |
+| Component | Location (post-merge) | Behavior |
 |-----------|----------|----------|
 | Route hook | `plugins/adaptive-routing/__init__.py:29` | Calls core `decide_turn_route()`, returns overrides |
-| CLI diagnostic | `plugins/adaptive-routing/__init__.py:120` | Classifies a message and shows route info |
+| CLI registration | `plugins/adaptive-routing/__init__.py:120` | `ctx.register_cli_command(name="adaptive-routing", ...)` |
+| CLI setup/handler | `plugins/adaptive-routing/__init__.py:87` / `:92` | `_route_setup` / `_route_handler` argparsing |
 | Task classifier | `agent/reasoning_policy.py:150` | Keyword/length-based scoring (27 hard + 15 medium keywords) |
 | Route decision | `agent/reasoning_policy.py:213` | MiMo-first → Codex quota-aware → DeepSeek fallback |
-| Gateway application | `gateway/run.py:3472` | Loads policy, fires hook, applies route |
-| Manual model override | `gateway/slash_commands.py:1394` | Stores in `_session_model_overrides` |
-| Quota seam | `gateway/quota_service.py` | Codex-only quota snapshots |
+| Codex quota helper | `agent/reasoning_policy.py:68` | `CodexQuotaState` dataclass |
+| Provider predicate | `agent/reasoning_policy.py:192` | `is_codex_provider(provider)` |
+| Gateway hook fire site | `gateway/run.py:3697` (`_resolve_turn_agent_config`) | Loads policy, fires `resolve_turn_route`, applies route |
+| Reasoning override gate | `gateway/run.py:3704` (`force_reasoning_config`) | Per-session reasoning override outranks hook |
+| Codex quota cache (60s TTL) | `gateway/run.py:3625` (`_get_codex_quota_state`) | Generic per-provider quota cache lives here post-merge |
+| Footer format helper | `gateway/runtime_footer.py:97` / `:108` | `_format_used_percent` / `_codex_quota_used_percent_from_snapshot` |
+| Manual model override | `gateway/slash_commands.py:1327` / `:1561` | `self._session_model_overrides[session_key] = {…}` |
+| Quota seam | `gateway/quota_service.py` | Codex-only quota snapshots (still the public boundary) |
 
 ### Limitations
 
 1. **Keyword-only classification** — no semantic understanding, no context, no multi-turn awareness.
 2. **Static model mapping** — hardcoded model names in `DEFAULT_REASONING_POLICY`.
-3. **Manual model can be overridden** — no model-lock equivalent to `force_reasoning_config` at `gateway/run.py:3499`.
+3. **Manual model can be overridden** — no model-lock equivalent to `force_reasoning_config` at `gateway/run.py:3704` (post-merge).
 4. **Codex-only quota** — Opencode Go quota not wired.
 5. **No feedback loop** — routing decisions are not tracked or improved.
 6. **No trace/observability** — minimal diagnostic output.
@@ -110,7 +117,7 @@ User message
 
 ### Final Decision Hook Contract
 
-Add a "final decision" return type to the hook contract in `hermes_cli/plugins.py:201`:
+Add a "final decision" return type to the hook contract in `hermes_cli/plugins.py:212` (post-merge location of the `resolve_turn_route` declaration):
 
 - If the plugin returns a complete route decision (provider + model + reasoning_effort + route_label), the gateway applies it directly and skips core `decide_turn_route()`.
 - If the plugin returns `None` or an incomplete result, the gateway falls back to core routing.
@@ -294,7 +301,7 @@ Where:
 
 ### Generic Quota State
 
-Extend the existing `CodexQuotaState` in `agent/reasoning_policy.py:67` to a provider-agnostic `QuotaState`:
+Extend the existing `CodexQuotaState` in `agent/reasoning_policy.py:68` (post-merge) to a provider-agnostic `QuotaState`:
 
 ```python
 @dataclass(frozen=True)
@@ -311,7 +318,7 @@ class QuotaState:
 - Extend `plugins/account_usage/` with an Opencode Go branch that returns the same snapshot shape as Codex.
 - Reuse the existing `gateway/quota_service.py` seam — no hot-path plugin imports.
 - Fetcher registered during plugin discovery; generic `fetch_quota_snapshot()` dispatches by provider.
-- 60-second cache TTL matching existing Codex quota cache at `gateway/run.py:3408`.
+- 60-second cache TTL matching existing Codex quota cache at `gateway/run.py:3625` (`_get_codex_quota_state` post-merge).
 
 ### DeepSeek PAYG
 
@@ -320,7 +327,7 @@ class QuotaState:
 
 ### Footer Display
 
-- Genericize `gateway/runtime_footer.py:135` to show quota % for both OpenAI OAuth and Opencode Go.
+- Genericize `gateway/runtime_footer.py:97` (`_format_used_percent`) — and the `provider_norm` branch at `:145-168` — to show quota % for both OpenAI OAuth and Opencode Go (post-merge locations).
 - DeepSeek footer shows route label only, no quota.
 
 ---
@@ -329,7 +336,7 @@ class QuotaState:
 
 ### Problem
 
-Manual model selection (`/model <name>`) stores in `_session_model_overrides` at `gateway/slash_commands.py:1394`, but adaptive routing can override it because there is no model-lock gate.
+Manual model selection (`/model <name>`) stores in `_session_model_overrides` at `gateway/slash_commands.py:1327` and `:1561` (post-merge; the textual picker also writes to the same dict), but adaptive routing can override it because there is no model-lock gate.
 
 ### Solution: Explicit Route Mode
 
@@ -350,9 +357,9 @@ Manual model selection (`/model <name>`) stores in `_session_model_overrides` at
    - Evicts cached agent.
    - Returns session to adaptive routing.
 
-3. Gateway gate at `_resolve_turn_agent_config()` (`gateway/run.py:3472`):
+3. Gateway gate at `_resolve_turn_agent_config()` (`gateway/run.py:3697` post-merge):
    - Check model lock before firing route hook.
-   - If locked, skip adaptive routing (analogous to `force_reasoning_config`).
+   - If locked, skip adaptive routing (analogous to `force_reasoning_config` at `:3704`).
 
 4. Response footer shows route source:
    - `🔒 manual | claude-3.5` — user selected, locked.
@@ -475,3 +482,31 @@ Manual model selection (`/model <name>`) stores in `_session_model_overrides` at
 - [ ] No hot-path imports from plugin modules in `gateway/run.py`.
 - [ ] Manual model selection stable across turns until explicit auto return.
 - [ ] Legacy config users keep working after migration.
+
+---
+
+## 10. Post-merge state (2026-06-28 NousResearch integration)
+
+The plan's pre-merge line references were refreshed in the table above; everything below here records how the upstream merge interacts with the planned work.
+
+**What changed upstream that this plan must respect:**
+
+- `gateway/run.py` grew from ~10k to 19255 LOC. `_resolve_turn_agent_config` (line 3697) now takes a wider kwargs surface: `policy`, `reasoning_config`, `force_reasoning_config`, `user_message`, `primary_provider`, `primary_model`, `session_key`, `runtime`. The hook fire-site gate is the existing `force_reasoning_config` boolean at line 3704 — a clean analog for the planned model-lock gate.
+- `gateway/run.py:3625` introduced a generic `_get_codex_quota_state()` / `_get_codex_quota_used_percent()` pair that already implements a 60-second per-key cache. Phase 3 (Quota Generalization) should **reuse this cache helper directly** rather than introduce a parallel generic quota cache.
+- `gateway/runtime_footer.py:97` (`_format_used_percent`) plus the `provider_norm` switch at `:145-168` already dispatches on `{"openai-codex", "codex"}` vs `"deepseek"`. Phase 3's "genericize footer" step reduces to adding an `"opencode"` branch to the same dispatch.
+- Upstream added three new kanban-task hook names to `STANDARD_HOOKS` (`kanban_task_claimed`, `kanban_task_completed`, `kanban_task_blocked`). These do not interact with adaptive routing but confirm the hook-list now lives in one place — keep `resolve_turn_route` listed alongside them.
+
+**What this plan adds that upstream does not already cover:**
+
+- Provider-agnostic `QuotaState` in `agent/reasoning_policy.py` (currently `CodexQuotaState` only at line 68).
+- Opencode Go five-hour rolling quota in `plugins/account_usage/`.
+- Stack/tier definitions, balanced scoring, and route trace (plugin-owned, no upstream equivalent).
+- Manual model lock and `/routing auto` UX (no upstream equivalent).
+- Final-decision semantics on the `resolve_turn_route` hook contract (the upstream hook is advisory-only today — the gateway still calls `decide_turn_route()` after the hook returns).
+
+**Validation after this merge (recorded for the integration branch `update/upstream-2026-06-28`):**
+
+- All 5 private-fork hook fire sites verified intact in post-merge `gateway/run.py`: `resolve_turn_route` (3736), `pre_gateway_authorize_message` busy (4944) and cold (8255), `format_gateway_runtime_footer` (10823), `on_final_response_persisted` (11163).
+- `STANDARD_HOOKS` in `hermes_cli/plugins.py` contains all 5 private-fork hook names + all 3 upstream kanban hook names after the conflict resolution.
+- Targeted plugin test subsets: `tests/plugins/adaptive_routing`, `tests/plugins/account_usage`, `tests/plugins/gateway_noiseless_failover`, `tests/plugins/gateway_runtime_metadata`, `tests/plugins/message_allowlist` all green. `tests/test_plugin_hooks.py`, `tests/test_quota_service.py`, `tests/test_hermes_state.py`, `tests/gateway/test_runtime_footer.py`, `tests/gateway/test_unauthorized_dm_behavior.py`, `tests/gateway/test_usage_command.py`, `tests/agent/test_reasoning_policy.py`, `tests/hermes_cli/test_gateway.py` all green.
+- One test-fix commit on top of the merge: `tests/gateway/test_compression_failure_session_sync.py` mock lambda updated to accept the new `reasoning_config` / `force_reasoning_config` kwargs the upstream call site now passes. This is the only private-fork test touched by the merge.
