@@ -77,6 +77,51 @@ class CodexQuotaState:
     reset_at: Optional[datetime] = None
     unavailable: bool = False
 
+    def with_provider(self, provider: str) -> "QuotaState":
+        """Lift this Codex snapshot into a provider-agnostic ``QuotaState``.
+
+        The plugin-owned policy engine uses ``QuotaState`` so it can branch
+        on ``provider`` and ``is_payg`` without touching the existing
+        Codex-only call sites.  ``from_usage_snapshot`` keeps working as
+        before.
+        """
+        return QuotaState(
+            provider=provider,
+            percent_remaining=self.percent_remaining,
+            reset_at=self.reset_at,
+            unavailable=self.unavailable,
+            is_payg=False,
+        )
+
+
+@dataclass(frozen=True)
+class QuotaState:
+    """Provider-agnostic quota snapshot for routing.
+
+    Mirrors ``CodexQuotaState`` but adds ``provider`` and ``is_payg`` so the
+    adaptive-routing plugin can score candidates across OpenAI OAuth,
+    Opencode Go (5-hour rolling), and PAYG providers like DeepSeek
+    without hardcoding provider names.
+
+    Build instances via ``CodexQuotaState.with_provider(provider)`` for
+    rolling-quota providers, or ``QuotaState.payg(provider)`` for PAYG
+    providers that should never be quota-penalized.
+    """
+
+    provider: str
+    percent_remaining: Optional[float] = None
+    reset_at: Optional[datetime] = None
+    unavailable: bool = False
+    is_payg: bool = False
+
+    @classmethod
+    def payg(cls, provider: str) -> "QuotaState":
+        return cls(provider=provider, is_payg=True)
+
+    @classmethod
+    def unknown(cls, provider: str) -> "QuotaState":
+        return cls(provider=provider, unavailable=True)
+
     @classmethod
     def from_usage_snapshot(cls, snapshot: Any) -> "CodexQuotaState":
         if not snapshot or getattr(snapshot, "unavailable_reason", None):

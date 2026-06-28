@@ -117,11 +117,17 @@ class TestAdaptiveRoutingPlugin:
 
     def test_route_hook_handles_classify_error(self):
         mod = _load_plugin_module("adaptive-routing")
-        with patch("agent.reasoning_policy.decide_turn_route", side_effect=RuntimeError("boom")):
+        # The new policy engine lives in plugins.adaptive_routing.policy —
+        # patch the symbol as seen by the plugin package so the hook
+        # observes the failure.  When the engine raises, the hook must
+        # return None so the gateway falls back to core routing.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("boom")
+        with patch.object(mod, "select_route", side_effect=_boom):
             result = mod._resolve_turn_route_hook(
                 user_message="hello",
-                primary_provider="openai-codex",
-                primary_model="gpt-5.5",
+                primary_provider="opencode-go",
+                primary_model="mimo-v2.5",
                 session_key="sk",
                 policy={"enabled": True},
             )
@@ -132,4 +138,8 @@ class TestAdaptiveRoutingPlugin:
         ctx = _make_ctx()
         mod.register(ctx)
         manager = ctx._manager
-        assert "adaptive-routing" in manager._cli_commands or "adaptive_routing" in manager._cli_commands
+        # The plugin registers two diagnostic CLI commands:
+        # ``route-diagnose`` (balanced-scoring trace for a message) and
+        # ``route-trace`` (recent route decisions buffer).
+        assert "route-diagnose" in manager._cli_commands
+        assert "route-trace" in manager._cli_commands

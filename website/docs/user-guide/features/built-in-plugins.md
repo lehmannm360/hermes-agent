@@ -68,7 +68,7 @@ The repo ships these bundled plugins under `plugins/`. All are opt-in — enable
 | `account-usage` | CLI + quota service | Codex account usage/quota inspection and quota snapshot registration for gateway runtime consumers |
 | `gateway-runtime-metadata` | hooks + CLI | Runtime footer hook integration and response-reference lookup; response-ref persistence remains core-owned |
 | `message-allowlist` | authorization hook + CLI | Cross-platform message allowlist diagnostics and fail-closed gateway authorization when enforcement is enabled |
-| `adaptive-routing` | routing hook + CLI | Cache-safe route diagnostics and MiMo/Codex/DeepSeek adaptive routing policy integration |
+| `adaptive-routing` | routing hook + CLI | Cache-safe route diagnostics and Opencode Go / OpenAI Codex / DeepSeek PAYG adaptive routing policy integration; manual model lock + `/model auto` for return-to-auto |
 | `gateway-noiseless-failover` | policy + CLI | Quiet fallback/status policy diagnostics; policy-only until `transform_status_event` is live-fired |
 | `hermes-achievements` | dashboard tab | Steam-style collectible badges generated from your real Hermes session history |
 | `kanban/dashboard` | dashboard tab | Kanban board UI for the multi-agent dispatcher — tasks, comments, fan-out, board switching. See [Kanban Multi-Agent](./kanban.md). |
@@ -253,7 +253,7 @@ Cross-platform message allowlist policy and diagnostics. The plugin registers th
 
 ### adaptive-routing
 
-Cache-safe routing policy for model/provider/reasoning selection. The plugin registers `resolve_turn_route` and delegates to the shared `agent.reasoning_policy` policy code so plugin and core behavior remain aligned.
+Cache-safe routing policy for model/provider/reasoning selection. The plugin registers `resolve_turn_route` and owns the balanced scoring engine in `plugins/adaptive-routing/policy.py`; core `agent.reasoning_policy` stays as the self-contained fallback used when the plugin is disabled or returns an advisory/incomplete result.
 
 **Invariants:**
 
@@ -261,6 +261,29 @@ Cache-safe routing policy for model/provider/reasoning selection. The plugin reg
 - Returned keys that could mutate messages, history, tools, toolsets, system prompts, or memory are ignored by the gateway.
 - Explicit `/reasoning` session overrides and forced reasoning config always outrank plugin route decisions.
 - Quota snapshots are read through `gateway.quota_service` and degrade to quota-unavailable routing if account usage is disabled.
+- The plugin stores its config under `plugins.adaptive_routing.*` with a legacy overlay onto `agent.reasoning_policy.*` for back-compat.
+
+**Manual vs. auto routing**
+
+- `/model <provider:model>` selects a manual model for the session and sets a per-session lock. While locked, adaptive routing is bypassed and the chosen provider/model is honored for every turn.
+- `/model auto` returns the session to adaptive routing: it clears the manual lock, drops the session model override, and evicts the cached agent so the next turn re-runs the `resolve_turn_route` hook with no pin in place.
+- `/new` and `/reset` also clear the lock.
+- There is no separate `/routing` command — the return-to-auto path lives entirely on `/model auto`.
+
+**Planned stacks (defaults shipped in `plugins/adaptive-routing/policy.py`)**
+
+| Stack | Routine | Difficult | Complex |
+|---|---|---|---|
+| Primary (Opencode Go + OpenAI OAuth) | `mimo-v2.5` (Opencode Go) | `minimax-m3` (Opencode Go) | `gpt-5.5` (OpenAI OAuth / Codex) |
+| Codex fallback (OpenAI OAuth) | `gpt-5.4-mini` | `gpt-5.4` | `gpt-5.5` |
+| DeepSeek fallback (PAYG) | `deepseek-v4-flash` | `deepseek-v4-pro` | `deepseek-v4-pro` |
+
+The objective is **balanced** (quality vs. cost). Latency is not a criterion. Quota-aware behavior: Codex rolling usage penalizes candidates approaching the configured low/emergency thresholds; DeepSeek PAYG is always eligible with no quota penalty; Opencode Go / Opencode Zen currently have no supported quota source, so they neither penalize nor surface a quota percentage in footers.
+
+**Diagnostics**
+
+- `hermes route-diagnose "<message>"` — run the balanced scoring engine on a sample message and print tier, stack, effort, provider/model, score breakdown, and fallback reason.
+- `hermes route-trace [--clear]` — show the last N route decisions. Requires `plugins.adaptive_routing.trace.enabled: true` in `config.yaml`.
 
 **Enabling:** `hermes plugins enable adaptive-routing`.
 
