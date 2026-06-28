@@ -45,6 +45,42 @@ def test_list_authenticated_providers_includes_custom_providers(monkeypatch):
     )
 
 
+def test_list_authenticated_providers_hides_manifest_custom_provider(monkeypatch):
+    """Manifest.build legacy custom rows must not appear in /model pickers."""
+    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
+    monkeypatch.setattr(providers_mod, "HERMES_OVERLAYS", {})
+
+    providers = list_authenticated_providers(
+        current_provider="openai-codex",
+        user_providers={
+            "manifest": {
+                "name": "Manifest",
+                "base_url": "https://api.manifest.build/v1",
+                "models": {"manifest-model": {}},
+                "discover_models": False,
+            }
+        },
+        custom_providers=[
+            {
+                "name": "Manifest",
+                "base_url": "https://api.manifest.build/v1",
+                "model": "manifest-model",
+                "discover_models": False,
+            }
+        ],
+        max_models=50,
+    )
+
+    assert not any(
+        "manifest" in (
+            str(p.get("slug", ""))
+            + str(p.get("name", ""))
+            + str(p.get("api_url", ""))
+        ).lower()
+        for p in providers
+    )
+
+
 def test_resolve_provider_full_finds_named_custom_provider():
     """Explicit /model --provider should resolve saved custom_providers entries."""
     resolved = resolve_provider_full(

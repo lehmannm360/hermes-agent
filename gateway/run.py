@@ -3709,6 +3709,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         *,
         reasoning_config: Optional[dict] = None,
         force_reasoning_config: bool = False,
+        session_key: str = "",
     ) -> dict:
         """Build the effective model/runtime config for a single turn.
 
@@ -3740,7 +3741,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _DANGEROUS_ROUTE_KEYS = frozenset({
                 "messages", "history", "tools", "toolsets", "system", "memory",
             })
-            _session_key_for_route = ""
+            _session_key_for_route = str(session_key or "")
             _route_hook_overridden = False
             _route_hook_final = False  # plugin owns the decision — skip core routing
             try:
@@ -12474,6 +12475,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 runtime_kwargs,
                 reasoning_config=reasoning_config,
                 force_reasoning_config=has_session_reasoning_override,
+                session_key=self._session_key_for_source(source),
             )
             effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
             turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
@@ -16767,6 +16769,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 force_reasoning_config=(
                     session_key in (getattr(self, "_session_reasoning_overrides", {}) or {})
                 ),
+                session_key=session_key,
             )
             effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
             turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)

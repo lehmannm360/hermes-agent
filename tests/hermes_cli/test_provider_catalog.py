@@ -6,7 +6,7 @@ catalog exposes, plus how each provider's ``auth_type`` maps to a desktop tab â€
 never a specific provider count or a frozen vendor list (both change over time).
 """
 
-from hermes_cli.models import CANONICAL_PROVIDERS
+from hermes_cli.models import CANONICAL_PROVIDERS, is_hidden_model_selection_provider
 from hermes_cli.provider_catalog import (
     ProviderDescriptor,
     provider_catalog,
@@ -29,6 +29,11 @@ def test_catalog_has_no_providers_outside_hermes_model():
     canonical = {e.slug for e in CANONICAL_PROVIDERS}
     for d in provider_catalog():
         assert d.slug in canonical, f"{d.slug} in catalog but not in CANONICAL_PROVIDERS"
+
+
+def test_catalog_excludes_hidden_private_fork_providers():
+    for d in provider_catalog():
+        assert not is_hidden_model_selection_provider(d.slug, d.label, d.signup_url)
 
 
 def test_every_descriptor_lands_on_exactly_one_known_tab():

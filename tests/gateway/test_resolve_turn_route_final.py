@@ -81,6 +81,11 @@ class TestResolveTurnAgentConfigFinalHook:
         from gateway import run as gw_run
         method = _bind_method(gw_run.GatewayRunner)
         stub = _StubRuntime()
+        stub._session_model_lock["telegram:12345"] = {
+            "model": "mimo-v2.5",
+            "provider": "opencode-go",
+            "source": "user",
+        }
 
         hook_payload = {
             "provider": "opencode-go",
@@ -105,6 +110,7 @@ class TestResolveTurnAgentConfigFinalHook:
                     },
                     reasoning_config=None,
                     force_reasoning_config=False,
+                    session_key="telegram:12345",
                 )
 
         # The plugin's decision must be applied directly.  The
@@ -113,9 +119,38 @@ class TestResolveTurnAgentConfigFinalHook:
         assert route.get("route_hook_final") is True
         assert route["model"] == "mimo-v2.5"
         assert route["route_label"] == "mimo"
-        assert route["route_source"] == "adaptive"
+        assert route["route_source"] == "manual"
         # ``reasoning_config`` is set from the hook's reasoning_effort.
         assert route["reasoning_config"]["effort"] == "low"
+
+    def test_session_key_is_passed_to_route_hook_for_manual_lock(self):
+        from gateway import run as gw_run
+        method = _bind_method(gw_run.GatewayRunner)
+        stub = _StubRuntime()
+        captured = {}
+
+        def _hook(*args, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("hermes_cli.plugins.invoke_hook", side_effect=_hook):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+                method(
+                    stub,
+                    user_message="please use the manually selected model",
+                    model="manual-model",
+                    runtime_kwargs={
+                        "provider": "manual-provider",
+                        "base_url": "https://example.invalid/v1",
+                        "api_key": "x",
+                        "api_mode": "chat_completions",
+                    },
+                    reasoning_config=None,
+                    force_reasoning_config=False,
+                    session_key="telegram:12345",
+                )
+
+        assert captured["session_key"] == "telegram:12345"
 
     def test_advisory_hook_does_not_set_final_marker(self):
         from gateway import run as gw_run

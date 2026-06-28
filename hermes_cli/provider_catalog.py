@@ -89,7 +89,7 @@ def provider_catalog() -> list[ProviderDescriptor]:
     canonical/env fallbacks so providers without a profile (or with blank
     profile metadata) still resolve sensibly.
     """
-    from hermes_cli.models import CANONICAL_PROVIDERS
+    from hermes_cli.models import CANONICAL_PROVIDERS, is_hidden_model_selection_provider
 
     # PROVIDER_REGISTRY / list_providers are imported lazily and defensively:
     # this module is on the import path of the web server and the CLI, and we
@@ -122,6 +122,8 @@ def provider_catalog() -> list[ProviderDescriptor]:
     out: list[ProviderDescriptor] = []
     for order, entry in enumerate(CANONICAL_PROVIDERS):
         slug = entry.slug
+        if is_hidden_model_selection_provider(slug, entry.label, ""):
+            continue
         cfg = PROVIDER_REGISTRY.get(slug)
         prof = profiles.get(slug)
         overlay = HERMES_OVERLAYS.get(slug)

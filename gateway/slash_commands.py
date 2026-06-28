@@ -1486,6 +1486,7 @@ class GatewaySlashCommandsMixin:
 
             lines.append(t("gateway.model.usage_switch_model"))
             lines.append(t("gateway.model.usage_switch_provider"))
+            lines.append(t("gateway.model.usage_auto"))
             lines.append(t("gateway.model.usage_persist"))
             return "\n".join(lines)
 

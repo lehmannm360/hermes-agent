@@ -2282,6 +2282,23 @@ def list_authenticated_providers(
                 _row["total_models"] = _row.get("total_models", len(_models)) + 1
             break
 
+    # Hide private-fork providers from every model-selection surface. They may
+    # still exist in legacy user config or out-of-tree provider plugins, but are
+    # not part of the supported Hermes picker/catalog universe.
+    try:
+        from hermes_cli.models import is_hidden_model_selection_provider
+
+        results = [
+            r for r in results
+            if not is_hidden_model_selection_provider(
+                r.get("slug", ""),
+                r.get("name", ""),
+                r.get("api_url", ""),
+            )
+        ]
+    except Exception:
+        pass
+
     # Sort: current provider first, then by model count descending
     results.sort(key=lambda r: (not r["is_current"], -r["total_models"]))
 

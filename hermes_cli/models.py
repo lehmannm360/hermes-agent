@@ -1014,6 +1014,40 @@ class ProviderEntry(NamedTuple):
     label: str
     tui_desc: str   # detailed description for `hermes model` TUI
 
+
+_HIDDEN_MODEL_SELECTION_PROVIDER_SLUGS: frozenset[str] = frozenset(
+    {
+        "manifest",
+        "custom:manifest",
+    }
+)
+_HIDDEN_MODEL_SELECTION_PROVIDER_HOSTS: tuple[str, ...] = (
+    "manifest.build",
+)
+
+
+def is_hidden_model_selection_provider(
+    slug: str = "",
+    label: str = "",
+    base_url: str = "",
+) -> bool:
+    """Return True for private-fork providers hidden from picker surfaces.
+
+    These providers may still exist in a user's config or out-of-tree provider
+    plugin, but they are not part of the supported Hermes model-selection
+    catalog and should not be shown by ``hermes model`` / gateway ``/model``
+    pickers.
+    """
+    slug_norm = str(slug or "").strip().lower()
+    label_norm = str(label or "").strip().lower()
+    url_norm = str(base_url or "").strip().lower()
+    if slug_norm in _HIDDEN_MODEL_SELECTION_PROVIDER_SLUGS:
+        return True
+    if label_norm in {"manifest", "manifest.build"}:
+        return True
+    return any(host in url_norm for host in _HIDDEN_MODEL_SELECTION_PROVIDER_HOSTS)
+
+
 CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("nous",           "Nous Portal",              "Nous Portal (Everything your agent needs, 300+ models with bundled tool use)"),
     ProviderEntry("openrouter",     "OpenRouter",               "OpenRouter (Pay-per-use API aggregator)"),
@@ -1061,6 +1095,12 @@ try:
     from providers import list_providers as _list_providers_for_canonical
     for _pp in _list_providers_for_canonical():
         if _pp.name in _canonical_slugs:
+            continue
+        if is_hidden_model_selection_provider(
+            _pp.name,
+            _pp.display_name,
+            getattr(_pp, "inference_base_url", ""),
+        ):
             continue
         if _pp.auth_type in {"oauth_device_code", "oauth_external", "external_process", "aws_sdk", "copilot"}:
             continue  # non-api-key flows need bespoke picker UX; skip auto-inject

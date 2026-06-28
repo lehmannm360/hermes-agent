@@ -217,6 +217,11 @@ class TestGatewayHelpLines:
         assert len(bg_line) == 1
         assert "/bg" in bg_line[0]
 
+    def test_model_help_surfaces_auto_hint(self):
+        lines = gateway_help_lines()
+        model_line = next(l for l in lines if l.startswith("`/model "))
+        assert "model|auto" in model_line
+
 
 class TestTelegramBotCommands:
     def test_returns_list_of_tuples(self):

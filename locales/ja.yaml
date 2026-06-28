@@ -40,6 +40,7 @@ gateway:
     more_models_suffix:     " (他 {count} 件)"
     usage_switch_model:     "`/model <name>` — モデルを切り替え"
     usage_switch_provider:  "`/model <name> --provider <slug>` — プロバイダーを切り替え"
+    usage_auto:             "`/model auto` — return this session to adaptive routing"
     usage_persist:          "`/model <name> --global` — 永続化"
     # /model auto — return the session to adaptive routing. Replaces the
     # previous /routing auto command.

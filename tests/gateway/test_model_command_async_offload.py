@@ -106,6 +106,8 @@ async def test_text_fallback_offloads_list_authenticated_providers(_isolated_con
     result = await runner._handle_model_command(_make_event())
 
     assert result is not None  # text list rendered
+    assert "`/model auto`" in result
+    assert "adaptive routing" in result
     offloaded = spy.funcs_offloaded()
     assert _fake_list_authenticated_providers in offloaded, (
         "list_authenticated_providers must be dispatched via asyncio.to_thread "
