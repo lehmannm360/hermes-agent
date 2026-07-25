@@ -3732,12 +3732,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if force_reasoning_config and reasoning_config:
             route["reasoning_config"] = dict(reasoning_config)
 
+        # Detect active session model override so we can skip both the
+        # adaptive-routing hook AND core routing — the user explicitly
+        # chose a model via /model and it must not be overridden.
+        _has_session_override = bool(
+            session_key
+            and session_key in (getattr(self, "_session_model_overrides", {}) or {})
+        )
+
         policy = self._load_reasoning_policy()
-        if bool(policy.get("enabled")) and not force_reasoning_config:
+        if bool(policy.get("enabled")) and not force_reasoning_config and not _has_session_override:
             # Fire resolve_turn_route hook — cache-safe: only explicit turn
             # inputs are passed, not mutable messages/history/toolsets/system.
             # Dangerous returned keys are ignored.  Session overrides outrank
-            # this hook (enforced by the force_reasoning_config gate above).
+            # this hook (enforced by the force_reasoning_config and
+            # _has_session_override gates above).
             _DANGEROUS_ROUTE_KEYS = frozenset({
                 "messages", "history", "tools", "toolsets", "system", "memory",
             })
@@ -3838,7 +3847,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             else:
                 _skip_core_routing = False
 
-            if not _skip_core_routing:
+            if not _skip_core_routing and not _has_session_override:
                 try:
                     from agent.reasoning_policy import (
                         decide_turn_route,
