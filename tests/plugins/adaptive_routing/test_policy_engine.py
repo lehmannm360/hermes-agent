@@ -230,7 +230,7 @@ class TestSelectRoute:
         assert decision.model == "mimo-v2.5"
         assert decision.tier == policy.TIER_ROUTINE
 
-    def test_difficult_picks_minimax_m3(self, policy):
+    def test_difficult_picks_mimo_v2_5(self, policy):
         decision = policy.select_route(
             "Implement a new retry helper and add unit tests",
             quota_states={},
@@ -238,7 +238,8 @@ class TestSelectRoute:
         assert decision is not None
         assert decision.tier == policy.TIER_DIFFICULT
         assert decision.provider == "opencode-go"
-        assert decision.model == "minimax-m3"
+        assert decision.model == "mimo-v2.5"
+        assert decision.route_label == "mimo"
 
     def test_complex_picks_codex_5_5(self, policy):
         decision = policy.select_route(

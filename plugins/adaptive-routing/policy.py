@@ -270,8 +270,8 @@ DEFAULT_STACKS: dict[str, Stack] = {
             ),
             TIER_DIFFICULT: TierCandidate(
                 provider="opencode-go",
-                model="minimax-m3",
-                label="minimax",
+                model="mimo-v2.5",
+                label="mimo",
                 quality_score=0.8,
                 cost_score=0.5,
                 reasoning_range=("medium", "high"),

@@ -17484,11 +17484,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if isinstance(effective_reasoning_config, dict):
                 _resolved_reasoning_effort = effective_reasoning_config.get("effort")
             _resolved_route_label = turn_route.get("route_label")
+            # DEBUG: trace footer label resolution
+            logger.warning(
+                "FOOTER_DEBUG display_model=%r resolved_model=%r turn_route_model=%r "
+                "resolved_provider=%r turn_route_provider=%r route_label=%r",
+                _display_model, _resolved_model, turn_route.get("model"),
+                _resolved_provider, turn_route.get("runtime", {}).get("provider"),
+                _resolved_route_label,
+            )
             if (
                 _agent
                 and (
                     _resolved_provider != turn_route.get("runtime", {}).get("provider")
                     or _resolved_model != turn_route.get("model")
+                    # Also clear when the API returned a different model than
+                    # the routing decision requested (e.g. opencode-go resolving
+                    # to a different model than the adaptive routing picked).
+                    or _display_model != turn_route.get("model")
                 )
             ):
                 # A mid-turn fallback changed the actual model/provider.  Let

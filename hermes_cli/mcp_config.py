@@ -673,6 +673,9 @@ def _reauth_oauth_server(name: str, server_config: dict) -> bool:
     landed before reporting success. Shared by ``hermes mcp login`` and
     ``hermes mcp reauth`` so both behave identically for a single server.
     """
+    # Use a longer timeout for OAuth reauth — the user needs time to
+    # authorize in the browser and optionally paste a redirect URL.
+    _PROBE_TIMEOUT = 180  # 3 minutes for OAuth flow
     url = server_config.get("url")
     if not url:
         _error(f"Server '{name}' has no URL — not an OAuth-capable server")
@@ -695,7 +698,7 @@ def _reauth_oauth_server(name: str, server_config: dict) -> bool:
 
     # Probe triggers the OAuth flow (browser redirect + callback capture).
     try:
-        tools = _probe_single_server(name, server_config)
+        tools = _probe_single_server(name, server_config, connect_timeout=_PROBE_TIMEOUT)
         # A clean probe is NOT proof of authentication. Some MCP servers
         # (notably Google's official Drive server) serve initialize +
         # tools/list WITHOUT auth, so the probe lists tools even when the

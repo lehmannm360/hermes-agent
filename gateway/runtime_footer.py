@@ -47,10 +47,28 @@ def _home_relative_cwd(cwd: str) -> str:
         return cwd
 
 
+_REASONING_EFFORT_WORDS = frozenset({
+    "low", "medium", "high", "xhigh", "auto",
+})
+
+
 def _model_short(model: Optional[str]) -> str:
-    """Drop ``vendor/`` prefix for readability (``openai/gpt-5.4`` → ``gpt-5.4``)."""
+    """Drop ``vendor/`` prefix for readability (``openai/gpt-5.4`` → ``gpt-5.4``).
+
+    Some providers (e.g. opencode-go) return a composite ``"model / effort"``
+    string in ``response.model`` — strip the trailing reasoning-effort suffix
+    so the footer shows the actual model name, not the effort level.
+    """
     if not model:
         return ""
+    # Handle composite "model / effort" from providers like opencode-go.
+    # Split on " / " (space-slash-space) to avoid breaking normal vendor/model
+    # slugs like "openai/gpt-5.4" which use slash without spaces.
+    if " / " in model:
+        base = model.split(" / ", 1)[0].strip()
+        effort = model.split(" / ", 1)[1].strip().lower()
+        if effort in _REASONING_EFFORT_WORDS:
+            model = base
     return model.rsplit("/", 1)[-1]
 
 
