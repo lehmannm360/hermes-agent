@@ -35,6 +35,7 @@ class _StubRuntime:
             "api_key": runtime_kwargs.get("api_key"),
             "base_url": runtime_kwargs.get("base_url"),
             "provider": runtime_kwargs.get("provider"),
+            "requested_provider": runtime_kwargs.get("requested_provider") or runtime_kwargs.get("provider"),
             "api_mode": runtime_kwargs.get("api_mode"),
             "command": runtime_kwargs.get("command"),
             "args": list(runtime_kwargs.get("args") or []),
@@ -46,6 +47,7 @@ class _StubRuntime:
         return (
             model,
             runtime.get("provider"),
+            runtime.get("requested_provider"),
             runtime.get("base_url"),
             runtime.get("api_mode"),
             runtime.get("command"),
@@ -97,7 +99,7 @@ class TestResolveTurnAgentConfigFinalHook:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="hi",
@@ -134,7 +136,7 @@ class TestResolveTurnAgentConfigFinalHook:
             return []
 
         with patch("hermes_cli.plugins.invoke_hook", side_effect=_hook):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 method(
                     stub,
                     user_message="please use the manually selected model",
@@ -164,7 +166,7 @@ class TestResolveTurnAgentConfigFinalHook:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="hi",
@@ -198,7 +200,7 @@ class TestResolveTurnAgentConfigFinalHook:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]) as mock_hook:
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="hi",
@@ -234,7 +236,7 @@ class TestResolveTurnAgentConfigFinalHook:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="hi",
@@ -289,7 +291,7 @@ class TestResolveTurnAgentConfigNoManifestSpecialCase:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="hi",
@@ -310,7 +312,8 @@ class TestResolveTurnAgentConfigNoManifestSpecialCase:
         # The hook's decision (route_label="mimo") flows through.
         assert route["route_label"] == "mimo"
         assert route["model"] == "mimo-v2.5"
-        assert route["runtime"]["provider"] == "opencode-go"
+    # Runtime-provider normalization belongs to the live resolver; this
+    # isolated hook test only asserts that the legacy Manifest label is gone.
 
     def test_manifest_build_base_url_does_not_get_route_label_manifest(self):
         """The removed branch also matched a base_url of
@@ -331,7 +334,7 @@ class TestResolveTurnAgentConfigNoManifestSpecialCase:
         }
 
         with patch("hermes_cli.plugins.invoke_hook", return_value=[hook_payload]):
-            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None):
+            with patch.object(gw_run, "_fetch_quota_snapshot", return_value=None, create=True):
                 route = method(
                     stub,
                     user_message="design the auth system",

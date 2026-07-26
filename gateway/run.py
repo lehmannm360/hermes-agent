@@ -16260,6 +16260,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._reasoning_config = reasoning_config
             self._service_tier = self._resolve_session_service_tier(source=source)
             turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+            effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
 
             # Enrich the prompt with image descriptions so the background
             # agent can see user-attached images (same as the main flow).
