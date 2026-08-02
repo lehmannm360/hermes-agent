@@ -422,14 +422,47 @@ If anything regresses after restart:
 
 ## Verification Checklist (final sign-off)
 
-- [ ] `hermes fallback list` (default) = exactly `gpt-5.6-luna (openai-codex)` → `deepseek-v4-flash (deepseek)`
-- [ ] `hermes --profile content-agent fallback list` = same 2 entries
-- [ ] `hermes profile list` shows `deepseek-v4-flash` for both profiles
-- [ ] No `mimo`, `reasoning_policy`, or `adaptive_routing` refs in either active config
-- [ ] Both gateways running under launchd with fresh PIDs
-- [ ] Smoke chat on both profiles returns normally via opencode-go
-- [ ] No adaptive `route_label`/`route_source` in runtime footer
-- [ ] Plan committed to fork: `docs/plans/2026-08-02-retire-adaptive-routing-simplify-model-stack.md`, pushed, SHAs match
+- [x] `hermes fallback list` (default) = `gpt-5.6-luna (openai-codex)` → `deepseek-v4-flash (deepseek)` — verified live
+- [x] `hermes --profile content-agent fallback list` = same 2 entries — verified live
+- [x] `hermes profile list` shows `deepseek-v4-flash` for both profiles — both running
+- [x] No `mimo`, `reasoning_policy`, or `adaptive_routing` refs in either active config — zero hits both files
+- [x] Both gateways running under launchd with fresh PIDs — `ai.hermes.gateway` + `ai.hermes.gateway-content-agent`
+- [x] Smoke chat on both profiles returns normally via opencode-go — default 8s, content-agent 7s
+- [x] No adaptive `route_label`/`route_source` in runtime footer — `route_label=None` post-restart (FOOTER_DEBUG)
+- [x] Plan committed to fork, pushed, SHAs match — `4eb0ea9c13`, HEAD == agent/main
+- [x] Vision auxiliary sanity — both profiles answer via gpt-5.6-luna (see Execution Log §4 for the auth fix)
+- [x] Fallback/switch log check — no model-fallback entries during normal operation (only Telegram network fallback)
+- [ ] Fallback engagement forced test — SKIPPED (would require inducing a primary failure; log-based check performed instead)
+
+---
+
+## Execution Log — 2026-08-02 (all 10 tasks executed same day)
+
+### §1 Tasks 1–7: config edits (interactive)
+All edits applied with line-splicing (rest of file preserved byte-for-byte), YAML validated after each, snapshots taken first: `~/.hermes/config.yaml.bak-20260802`, `~/.hermes/profiles/content-agent/config.yaml.bak-20260802`.
+
+- Default profile: `fallback_providers` → 3-tier chain (Task 1); `agent.reasoning_policy` + `plugins.adaptive_routing` + plugin enable removed (Task 2).
+- Content-agent: `model.default` → deepseek-v4-flash/opencode-go, zen `base_url` dropped (Task 3); fallback chain replaced (Task 4); `mimo_*` policy + plugin removed (Task 5); `auxiliary.vision` → openai-codex/gpt-5.6-luna (Task 6).
+- Task 7 static validation passed: zero `mimo`/`adaptive` hits in both configs, both YAML valid, fallback lists correct on both profiles, plugin shows `not enabled`, smoke chats OK (8s / 7s).
+
+### §2 Task 8 restart incident (avoidable — lesson learned)
+The restart card was kanban-assigned to workers running ON the gateways they had to kickstart → each worker killed its own gateway mid-task → crash → dispatcher retried (2 failures) → **manual intervention by Esa** to stabilize. The gateways did restart successfully with the new config. Lesson patched into `hermes-adaptive-routing` skill: restarts are operator-executed, never kanban-assigned. Card K8 completed with honest summary after stabilization.
+
+### §3 Follow-up found by worker: residual MiMo refs outside plan scope
+During post-restart flow, a worker found and purged (card `t_f8816825`, done):
+- `~/.hermes/profiles/content-agent/.env`: `MNEMOSYNE_HOST_LLM_MODEL=mimo-v2.5` → `deepseek-v4-flash`; `XIAOMI_API_KEY` disabled; `XIAOMI_BASE_URL` commented (checked: `model-providers/xiaomi` plugin not enabled, so not load-bearing; `hidden_providers` entry untouched).
+- `~/.hermes/cron/jobs.json`: both sleep-consolidation prompts (daily-obsidian-memory-maintenance 03:00 MYT, content-agent 02:20 MYT) rewritten to "deepseek-v4-flash (via opencode-go)". JSON valid, 18 jobs.
+- 2 stale Mnemosyne memories referencing mimo-v2.5 invalidated.
+
+### §4 Sign-off caught a real auth gap (Task 6 side effect)
+`auxiliary.vision` → gpt-5.6-luna assumed Codex creds on content-agent. Reality: content-agent's `providers.openai-codex` tokens were stale (2026-07-05) and its pool `device_code` entry was `exhausted` → auxiliary vision (and fallback #1) could not resolve openai-codex. Default profile worked because it has no `providers.openai-codex` key and a fresh pool entry (`codex-phone-auth`, refreshed 2026-08-02 04:06).
+**Fix:** mirrored default's proven structure into `~/.hermes/profiles/content-agent/auth.json` — removed stale `providers.openai-codex`, replaced pool entry with fresh `codex-phone-auth` copy. Backup: `auth.json.bak-20260802`. Vision re-verified on both profiles (solid-red test PNG answered correctly). No codex resolution errors after fix.
+
+### §5 Sign-off results
+Footer `route_label=None` post-restart (old `mimo` labels are pre-restart history); no model-fallback entries in gateway log (only Telegram network fallback); zero current MiMo refs in both gateway logs; forced-fallback test intentionally skipped (would require inducing a primary failure).
+
+### §6 Repo state
+Plan commit `4eb0ea9c13` was pushed before execution. Configs live outside the repo. `package-lock.json` shows a pre-existing unrelated modification (not committed, per standing workflow).
 
 ---
 
@@ -443,6 +476,7 @@ If anything regresses after restart:
 
 ## Out of Scope (separate follow-ups)
 
-- **Upstream merge:** `origin/main` has drifted ~4016 files (mostly `website/` skill-docs restructure) since our fork's last sync. Merging that into the live runtime checkout is a separate, riskier operation (full test suite + fork-delta audit per `private-fork-update-audit` skill) — do NOT bundle it with this config migration.
-- **Plugin code deletion:** removing `plugins/adaptive-routing/` from the repo + tests is a later cleanup after the stack has proven stable.
-- **Content-agent gateway launchd label** may differ from `ai.hermes.gateway-content-agent`; confirm via `hermes gateway status` before restarting.
+- **Upstream merge:** `origin/main` has drifted ~4016 files (mostly `website/` skill-docs restructure) since our fork's last sync. Merging that into the live runtime checkout is a separate, riskier operation (full test suite + fork-delta audit per `private-fork-update-audit` skill) — do NOT bundle it with this config migration. **Status: still pending** — recommend a dedicated slot with its own test run.
+- **Plugin code deletion:** removing `plugins/adaptive-routing/` from the repo + tests is a later cleanup after the stack has proven stable. **Status: pending** — stack is stable as of 2026-08-02; deletion recommended after 2–3 days of clean fallback/operation.
+- **Content-agent gateway launchd label** — **confirmed** during execution: `ai.hermes.gateway-content-agent` (plus `ai.hermes.gateway` for default); the kanban dispatcher is embedded in the gateway (60s tick, singleton lock).
+- **Codex auth for content-agent** — resolved during sign-off (see Execution Log §4); a proper `hermes -p content-agent auth` re-auth is optional future hygiene, since the fix mirrored default's pool entry.
