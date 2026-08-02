@@ -127,7 +127,7 @@ class TestAdaptiveRoutingPlugin:
             result = mod._resolve_turn_route_hook(
                 user_message="hello",
                 primary_provider="opencode-go",
-                primary_model="mimo-v2.5",
+                primary_model="deepseek-v4-flash",
                 session_key="sk",
                 policy={"enabled": True},
             )

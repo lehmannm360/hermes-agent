@@ -12,16 +12,6 @@ from agent.reasoning_policy import (
 
 def _policy(**overrides):
     policy = dict(DEFAULT_REASONING_POLICY)
-    # Disable MiMo by default so existing Codex-centric tests keep working.
-    policy["mimo_provider"] = ""
-    policy.update(overrides)
-    return policy
-
-
-def _mimo_policy(**overrides):
-    """Policy with MiMo enabled as primary."""
-    policy = dict(DEFAULT_REASONING_POLICY)
-    policy["mimo_provider"] = "xiaomi"
     policy.update(overrides)
     return policy
 
@@ -30,94 +20,18 @@ def _quota(percent: float) -> CodexQuotaState:
     return CodexQuotaState(percent_remaining=percent, reset_at=None, unavailable=False)
 
 
-# ────────────────────────────── MiMo-first tests ──────────────────────────────
+# ────────────────────────────── Codex-first tests ────────────────────────────
 
 
-def test_mimo_tiny_uses_flash_low() -> None:
-    decision = decide_turn_route(
-        "Hi",
-        primary_provider="openai-codex",
-        primary_model="gpt-5.5",
-        quota=_quota(95),
-        policy=_mimo_policy(enabled=True),
-    )
-
-    assert decision.provider == "xiaomi"
-    assert decision.model == "mimo-v2.5"
-    assert decision.reasoning_effort == "low"
-    assert decision.route_label == "mimo"
-    assert format_route_footer(decision) == "mimo | low"
-
-
-def test_mimo_easy_uses_flash_medium() -> None:
-    decision = decide_turn_route(
-        "Summarize this short config and tell me if anything looks wrong.",
-        primary_provider="openai-codex",
-        primary_model="gpt-5.5",
-        quota=_quota(95),
-        policy=_mimo_policy(enabled=True),
-    )
-
-    assert decision.provider == "xiaomi"
-    assert decision.model == "mimo-v2.5"
-    assert decision.reasoning_effort == "medium"
-    assert decision.route_label == "mimo"
-    assert format_route_footer(decision) == "mimo | medium"
-
-
-def test_mimo_hard_uses_pro_xhigh() -> None:
-    decision = decide_turn_route(
-        "Implement multi-file refactor with migration steps and run integration tests.",
-        primary_provider="openai-codex",
-        primary_model="gpt-5.5",
-        quota=_quota(80),
-        policy=_mimo_policy(enabled=True),
-    )
-
-    assert decision.provider == "xiaomi"
-    assert decision.model == "mimo-v2.5-pro"
-    assert decision.reasoning_effort in {"high", "xhigh"}
-    assert decision.route_label == "mimo"
-
-
-def test_mimo_very_hard_uses_pro_xhigh() -> None:
-    decision = decide_turn_route(
-        "Debug this production outage, inspect the logs, patch the code, and run tests.",
-        primary_provider="openai-codex",
-        primary_model="gpt-5.5",
-        quota=_quota(80),
-        policy=_mimo_policy(enabled=True),
-    )
-
-    assert decision.provider == "xiaomi"
-    assert decision.model == "mimo-v2.5-pro"
-    assert decision.reasoning_effort == "xhigh"
-    assert format_route_footer(decision) == "mimo-pro | xhigh"
-
-
-def test_mimo_footer_flash_has_no_pro_suffix() -> None:
-    decision = decide_turn_route(
-        "thanks",
-        primary_provider="openai-codex",
-        primary_model="gpt-5.5",
-        quota=_quota(95),
-        policy=_mimo_policy(enabled=True),
-    )
-    assert format_route_footer(decision) == "mimo | low"
-
-
-def test_fallback_chain_mimo_first_codex_second_deepseek_third() -> None:
+def test_fallback_chain_codex_first_deepseek_second() -> None:
     from agent.reasoning_policy import classify_task
 
-    policy = _mimo_policy(enabled=True)
+    policy = _policy(enabled=True)
     profile = classify_task("Implement a multi-file refactor with tests.", policy)
     chain = fallback_chain_for_profile(policy, profile)
 
     providers = [e["provider"] for e in chain]
-    assert providers[0] == "xiaomi"
-    # Codex should be second
-    assert "openai-codex" in providers
-    assert providers.index("openai-codex") > providers.index("xiaomi")
+    assert providers[0] == "openai-codex"
     # DeepSeek should be last
     assert "deepseek" in providers
     assert providers.index("deepseek") > providers.index("openai-codex")
@@ -126,31 +40,22 @@ def test_fallback_chain_mimo_first_codex_second_deepseek_third() -> None:
 def test_fallback_chain_excludes_specified_provider() -> None:
     from agent.reasoning_policy import classify_task
 
-    policy = _mimo_policy(enabled=True)
+    policy = _policy(enabled=True)
     profile = classify_task("Summarize this.", policy)
 
-    # Excluding MiMo should start with Codex
-    chain = fallback_chain_for_profile(policy, profile, exclude_provider="xiaomi")
-    providers = [e["provider"] for e in chain]
-    assert "xiaomi" not in providers
-    assert providers[0] == "openai-codex"
-
-    # Excluding Codex should skip it
+    # Excluding Codex should skip it and start with DeepSeek
     chain = fallback_chain_for_profile(policy, profile, exclude_provider="openai-codex")
     providers = [e["provider"] for e in chain]
     assert "openai-codex" not in providers
-    assert providers[0] == "xiaomi"
+    assert providers[0] == "deepseek"
 
 
 def test_fallback_chain_easy_prefers_flash_then_pro() -> None:
     from agent.reasoning_policy import classify_task
 
-    policy = _mimo_policy(enabled=True)
+    policy = _policy(enabled=True)
     profile = classify_task("Summarize this.", policy)
     chain = fallback_chain_for_profile(policy, profile)
-
-    mimo_models = [e["model"] for e in chain if e["provider"] == "xiaomi"]
-    assert mimo_models == ["mimo-v2.5", "mimo-v2.5-pro"]
 
     codex_models = [e["model"] for e in chain if e["provider"] == "openai-codex"]
     assert codex_models == ["gpt-5.4-mini", "gpt-5.5"]
@@ -162,20 +67,14 @@ def test_fallback_chain_easy_prefers_flash_then_pro() -> None:
 def test_fallback_chain_hard_prefers_pro_then_flash() -> None:
     from agent.reasoning_policy import classify_task
 
-    policy = _mimo_policy(enabled=True)
+    policy = _policy(enabled=True)
     profile = classify_task(
         "Implement adaptive quota-aware model routing with production tests.", policy
     )
     chain = fallback_chain_for_profile(policy, profile)
 
-    mimo_models = [e["model"] for e in chain if e["provider"] == "xiaomi"]
-    assert mimo_models == ["mimo-v2.5-pro", "mimo-v2.5"]
-
     codex_models = [e["model"] for e in chain if e["provider"] == "openai-codex"]
     assert codex_models == ["gpt-5.5", "gpt-5.4-mini"]
-
-
-# ────────────────────────────── Codex tests (MiMo disabled) ──────────────────
 
 
 def test_tiny_healthy_codex_uses_mini_low_and_compact_footer() -> None:

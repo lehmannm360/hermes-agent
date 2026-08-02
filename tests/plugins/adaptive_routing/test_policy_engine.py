@@ -223,14 +223,14 @@ class TestScoreCandidates:
 
 
 class TestSelectRoute:
-    def test_routine_picks_mimo_v2_5(self, policy):
+    def test_routine_picks_deepseek_flash(self, policy):
         decision = policy.select_route("Hi", quota_states={})
         assert decision is not None
         assert decision.provider == "opencode-go"
-        assert decision.model == "mimo-v2.5"
+        assert decision.model == "deepseek-v4-flash"
         assert decision.tier == policy.TIER_ROUTINE
 
-    def test_difficult_picks_mimo_v2_5(self, policy):
+    def test_difficult_picks_deepseek_flash(self, policy):
         decision = policy.select_route(
             "Implement a new retry helper and add unit tests",
             quota_states={},
@@ -238,8 +238,8 @@ class TestSelectRoute:
         assert decision is not None
         assert decision.tier == policy.TIER_DIFFICULT
         assert decision.provider == "opencode-go"
-        assert decision.model == "mimo-v2.5"
-        assert decision.route_label == "mimo"
+        assert decision.model == "deepseek-v4-flash"
+        assert decision.route_label == "deepseek-flash"
 
     def test_complex_picks_codex_5_5(self, policy):
         decision = policy.select_route(
@@ -256,13 +256,13 @@ class TestSelectRoute:
         decision = policy.select_route(
             "Hi",
             quota_states={"opencode-go": quota},
-            excluded={("opencode-go", "mimo-v2.5")},
+            excluded={("opencode-go", "deepseek-v4-flash")},
         )
         assert decision is not None
         # Either the next tier's provider or a different model in the
         # primary stack.  Either way, the exhausted provider/model pair
         # must not appear.
-        assert (decision.provider, decision.model) != ("opencode-go", "mimo-v2.5")
+        assert (decision.provider, decision.model) != ("opencode-go", "deepseek-v4-flash")
 
     def test_decision_carries_final_decision_flag(self, policy):
         decision = policy.select_route("Hi", quota_states={})
@@ -444,7 +444,7 @@ class TestHookContract:
         result = plugin_pkg._resolve_turn_route_hook(
             user_message="Hi",
             primary_provider="opencode-go",
-            primary_model="mimo-v2.5",
+            primary_model="deepseek-v4-flash",
             session_key="",
             policy={"enabled": False},
         )
@@ -454,7 +454,7 @@ class TestHookContract:
         result = plugin_pkg._resolve_turn_route_hook(
             user_message="Hi",
             primary_provider="opencode-go",
-            primary_model="mimo-v2.5",
+            primary_model="deepseek-v4-flash",
             session_key="",
             policy=self._enable_policy(),
         )
@@ -473,7 +473,7 @@ class TestHookContract:
             result = plugin_pkg._resolve_turn_route_hook(
                 user_message="Hi",
                 primary_provider="opencode-go",
-                primary_model="mimo-v2.5",
+                primary_model="deepseek-v4-flash",
                 session_key="sk",
                 policy=self._enable_policy(),
             )
@@ -490,7 +490,7 @@ class TestHookContract:
         result = plugin_pkg._resolve_turn_route_hook(
             user_message="Hi",
             primary_provider="opencode-go",
-            primary_model="mimo-v2.5",
+            primary_model="deepseek-v4-flash",
             session_key="no-such-session",
             policy=self._enable_policy(),
         )
@@ -501,7 +501,7 @@ class TestHookContract:
         result = plugin_pkg._resolve_turn_route_hook(
             user_message="Hi",
             primary_provider="opencode-go",
-            primary_model="mimo-v2.5",
+            primary_model="deepseek-v4-flash",
             session_key="",
             policy=self._enable_policy(),
         )
@@ -520,7 +520,7 @@ class TestHookContract:
         result = plugin_pkg._resolve_turn_route_hook(
             user_message="Hi",
             primary_provider="opencode-go",
-            primary_model="mimo-v2.5",
+            primary_model="deepseek-v4-flash",
             session_key="",
             policy=self._enable_policy(),
         )

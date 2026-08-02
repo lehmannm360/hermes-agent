@@ -262,16 +262,16 @@ DEFAULT_STACKS: dict[str, Stack] = {
         candidates={
             TIER_ROUTINE: TierCandidate(
                 provider="opencode-go",
-                model="mimo-v2.5",
-                label="mimo",
+                model="deepseek-v4-flash",
+                label="deepseek-flash",
                 quality_score=0.6,
                 cost_score=0.3,
                 reasoning_range=("low", "medium"),
             ),
             TIER_DIFFICULT: TierCandidate(
                 provider="opencode-go",
-                model="mimo-v2.5",
-                label="mimo",
+                model="deepseek-v4-flash",
+                label="deepseek-flash",
                 quality_score=0.8,
                 cost_score=0.5,
                 reasoning_range=("medium", "high"),

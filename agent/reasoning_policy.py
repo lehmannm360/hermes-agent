@@ -39,9 +39,6 @@ DEFAULT_REASONING_POLICY: dict[str, Any] = {
     # User preference: preserve Codex as long as possible between 2–4%; let
     # existing runtime fallback handle a real quota/rate-limit error.
     "low_quota_hard_task_behavior": "use_codex_until_error",
-    "mimo_provider": "xiaomi",
-    "mimo_flash_model": "mimo-v2.5",
-    "mimo_pro_model": "mimo-v2.5-pro",
     "deepseek_provider": "deepseek",
     "deepseek_flash_model": "deepseek-v4-flash",
     "deepseek_pro_model": "deepseek-v4-pro",
@@ -238,10 +235,6 @@ def is_codex_provider(provider: Optional[str]) -> bool:
     return (provider or "").strip().lower() in {"openai-codex", "codex"}
 
 
-def is_mimo_provider(provider: Optional[str]) -> bool:
-    return (provider or "").strip().lower() in {"xiaomi", "mimo"}
-
-
 def is_codex_quota_error(error: Any) -> bool:
     """Return True for Codex usage/quota/rate exhaustion errors."""
     if not error:
@@ -274,10 +267,6 @@ def decide_turn_route(
             (primary_model or "").strip(),
             profile,
         )
-
-    # ── MiMo first (primary adaptive route when configured) ──
-    if str(_policy_get(policy, "mimo_provider") or "").strip():
-        return _mimo_decision(policy, profile)
 
     # ── Codex fallback (quota-aware, with DeepSeek fallback) ──
     provider = (primary_provider or "").strip()
@@ -326,31 +315,6 @@ def _codex_route(
         if behavior in {"fallback_if_unsafe", "fallback_huge", "fallback"} and profile.huge_or_unsafe:
             return _deepseek_decision(policy, profile, fallback_reason="codex_low_quota_huge_task")
     return _codex_decision(policy, provider, profile)
-
-
-def _mimo_decision(policy: Mapping[str, Any], profile: TaskProfile) -> TurnRouteDecision:
-    """Route to MiMo with difficulty-based model selection."""
-    provider = str(_policy_get(policy, "mimo_provider") or "xiaomi").strip()
-    return TurnRouteDecision(
-        provider=provider,
-        model=_mimo_model_for_profile(policy, profile),
-        reasoning_effort=profile.reasoning_effort,
-        route_label="mimo",
-        profile=profile,
-        runtime_provider=provider,
-    )
-
-
-def _mimo_model_for_profile(policy: Mapping[str, Any], profile: TaskProfile) -> str:
-    """Choose the right MiMo variant for task difficulty."""
-    configured = _policy_get(policy, "mimo_model_by_difficulty")
-    if isinstance(configured, Mapping):
-        candidate = str(configured.get(profile.difficulty) or "").strip()
-        if candidate:
-            return candidate
-    if _is_hard_profile(profile):
-        return str(_policy_get(policy, "mimo_pro_model") or "mimo-v2.5-pro").strip()
-    return str(_policy_get(policy, "mimo_flash_model") or "mimo-v2.5").strip()
 
 
 def _primary_decision(
@@ -418,8 +382,6 @@ def _route_label(provider: Optional[str], model: Optional[str]) -> str:
         return "codex"
     if provider_norm == "deepseek":
         return (model or "deepseek").rsplit("/", 1)[-1]
-    if provider_norm in {"xiaomi", "mimo"}:
-        return "mimo"
     return (model or provider or "model").rsplit("/", 1)[-1]
 
 
@@ -439,8 +401,6 @@ def format_route_footer(decision: TurnRouteDecision | Mapping[str, Any]) -> str:
     model_tail = str(model or "").rsplit("/", 1)[-1].lower()
     if is_codex_provider(str(provider or "")) and "mini" in model_tail:
         effort = f"mini-{effort}"
-    elif is_mimo_provider(str(provider or "")) and model_tail.endswith("-pro"):
-        label = "mimo-pro"
     return f"{label} | {effort}"
 
 
@@ -450,15 +410,7 @@ def fallback_chain_for_profile(policy: Mapping[str, Any], profile: TaskProfile, 
     chain: list[dict[str, str]] = []
     skip = exclude_provider.strip().lower()
 
-    # ── MiMo tier (first priority) ──
-    mimo_provider = str(_policy_get(policy, "mimo_provider") or "").strip()
-    if mimo_provider and mimo_provider.lower() != skip:
-        mimo_flash = str(_policy_get(policy, "mimo_flash_model") or "mimo-v2.5").strip()
-        mimo_pro = str(_policy_get(policy, "mimo_pro_model") or "mimo-v2.5-pro").strip()
-        ordered = [mimo_pro, mimo_flash] if hard else [mimo_flash, mimo_pro]
-        chain.extend({"provider": mimo_provider, "model": m} for m in ordered if m)
-
-    # ── Codex tier (second priority) ──
+    # ── Codex tier (first priority) ──
     codex_fast = str(_policy_get(policy, "codex_fast_model") or "gpt-5.4-mini").strip()
     codex_primary = str(_policy_get(policy, "codex_primary_model") or "gpt-5.5").strip()
     if skip != "openai-codex":
