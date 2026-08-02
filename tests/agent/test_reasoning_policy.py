@@ -58,7 +58,7 @@ def test_fallback_chain_easy_prefers_flash_then_pro() -> None:
     chain = fallback_chain_for_profile(policy, profile)
 
     codex_models = [e["model"] for e in chain if e["provider"] == "openai-codex"]
-    assert codex_models == ["gpt-5.4-mini", "gpt-5.5"]
+    assert codex_models == ["gpt-5.6-luna"]
 
     ds_models = [e["model"] for e in chain if e["provider"] == "deepseek"]
     assert ds_models == ["deepseek-v4-flash", "deepseek-v4-pro"]
@@ -74,52 +74,52 @@ def test_fallback_chain_hard_prefers_pro_then_flash() -> None:
     chain = fallback_chain_for_profile(policy, profile)
 
     codex_models = [e["model"] for e in chain if e["provider"] == "openai-codex"]
-    assert codex_models == ["gpt-5.5", "gpt-5.4-mini"]
+    assert codex_models == ["gpt-5.6-luna"]
 
 
-def test_tiny_healthy_codex_uses_mini_low_and_compact_footer() -> None:
+def test_tiny_healthy_codex_uses_luna_low_and_compact_footer() -> None:
     decision = decide_turn_route(
         "Hi",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=True),
     )
 
     assert decision.provider == "openai-codex"
-    assert decision.model == "gpt-5.4-mini"
+    assert decision.model == "gpt-5.6-luna"
     assert decision.reasoning_effort == "low"
     assert decision.route_label == "codex"
-    assert format_route_footer(decision) == "codex | mini-low"
+    assert format_route_footer(decision) == "codex | low"
 
 
-def test_easy_healthy_codex_uses_mini_medium_to_avoid_low_reasoning_mistakes() -> None:
+def test_easy_healthy_codex_uses_luna_medium_to_avoid_low_reasoning_mistakes() -> None:
     decision = decide_turn_route(
         "Summarize this short config and tell me if anything looks wrong.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=True),
     )
 
     assert decision.provider == "openai-codex"
-    assert decision.model == "gpt-5.4-mini"
+    assert decision.model == "gpt-5.6-luna"
     assert decision.reasoning_effort == "medium"
-    assert format_route_footer(decision) == "codex | mini-medium"
+    assert format_route_footer(decision) == "codex | medium"
 
 
 def test_trivial_capital_question_does_not_match_api_inside_capital() -> None:
     decision = decide_turn_route(
         "What is the capital of England?",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=True),
     )
 
     assert decision.profile.difficulty == "easy"
     assert decision.profile.score == 0
-    assert decision.model == "gpt-5.4-mini"
+    assert decision.model == "gpt-5.6-luna"
     assert decision.reasoning_effort == "medium"
 
 
@@ -128,13 +128,13 @@ def test_hard_planning_task_healthy_codex_stays_on_codex_with_xhigh_reasoning() 
         "Implement adaptive quota-aware model routing across the gateway, add tests, "
         "update config defaults, and verify the full diff.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(80),
         policy=_policy(enabled=True),
     )
 
     assert decision.provider == "openai-codex"
-    assert decision.model == "gpt-5.5"
+    assert decision.model == "gpt-5.6-luna"
     assert decision.reasoning_effort == "xhigh"
     assert format_route_footer(decision) == "codex | xhigh"
 
@@ -143,7 +143,7 @@ def test_low_quota_between_two_and_four_percent_still_prefers_codex_by_default()
     decision = decide_turn_route(
         "Implement a multi-file refactor with tests and migration steps.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(3),
         policy=_policy(enabled=True, low_quota_hard_task_behavior="use_codex_until_error"),
     )
@@ -156,14 +156,14 @@ def test_emergency_quota_routes_hard_tasks_to_deepseek_pro_but_tiny_tasks_to_cod
     hard = decide_turn_route(
         "Debug this production outage, inspect the logs, patch the code, and run tests.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(1),
         policy=_policy(enabled=True),
     )
     tiny = decide_turn_route(
         "thanks",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(1),
         policy=_policy(enabled=True),
     )
@@ -179,7 +179,7 @@ def test_codex_quota_error_fallback_selects_flash_for_easy_and_pro_for_hard() ->
     easy = decide_turn_route(
         "Summarize this sentence.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=True),
         codex_error="Rate limit exceeded for your Codex account quota",
@@ -187,7 +187,7 @@ def test_codex_quota_error_fallback_selects_flash_for_easy_and_pro_for_hard() ->
     hard = decide_turn_route(
         "Perform a security review of this repository and propose fixes with tests.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=True),
         codex_error="context deadline: usage limit reached",
@@ -212,10 +212,10 @@ def test_disabled_policy_returns_primary_unchanged() -> None:
     decision = decide_turn_route(
         "Implement this feature with tests.",
         primary_provider="openai-codex",
-        primary_model="gpt-5.5",
+        primary_model="gpt-5.6-luna",
         quota=_quota(95),
         policy=_policy(enabled=False),
     )
     assert decision.provider == "openai-codex"
-    assert decision.model == "gpt-5.5"
+    assert decision.model == "gpt-5.6-luna"
     assert decision.route_label == "codex"

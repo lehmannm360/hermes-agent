@@ -189,7 +189,7 @@ class TestScoreCandidates:
         healthy = policy.QuotaState(provider="openai-codex", percent_remaining=80.0)
         low = policy.QuotaState(provider="openai-codex", percent_remaining=3.0)
         zero = policy.QuotaState(provider="openai-codex", percent_remaining=0.0)
-        candidate = policy.TierCandidate("openai-codex", "gpt-5.5", "codex", 0.95, 0.8, ("high", "xhigh"))
+        candidate = policy.TierCandidate("openai-codex", "gpt-5.6-luna", "codex", 0.95, 0.8, ("high", "xhigh"))
         scored = policy.score_candidates(
             [candidate], policy.TIER_COMPLEX,
             {"openai-codex": healthy},
@@ -249,7 +249,7 @@ class TestSelectRoute:
         assert decision is not None
         assert decision.tier == policy.TIER_COMPLEX
         assert decision.provider == "openai-codex"
-        assert decision.model == "gpt-5.5"
+        assert decision.model == "gpt-5.6-luna"
 
     def test_exhausted_provider_excluded(self, policy):
         quota = policy.QuotaState(provider="opencode-go", percent_remaining=0.0)
@@ -402,10 +402,10 @@ class TestManualLock:
         ml = _import_manual_lock()
         locks: dict = {}
         assert ml.is_locked(locks, "k") is False
-        ml.set_lock(locks, "k", model="gpt-5.5", provider="openai-codex")
+        ml.set_lock(locks, "k", model="gpt-5.6-luna", provider="openai-codex")
         assert ml.is_locked(locks, "k") is True
         assert ml.get_lock(locks, "k") == {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-luna",
             "provider": "openai-codex",
             "source": "user",
         }
@@ -467,7 +467,7 @@ class TestHookContract:
     def test_lock_overrides_plugin_decision(self, plugin_pkg):
         locks: dict = {}
         from plugins.adaptive_routing.manual_lock import set_lock
-        set_lock(locks, "sk", model="gpt-5.5", provider="openai-codex")
+        set_lock(locks, "sk", model="gpt-5.6-luna", provider="openai-codex")
         plugin_pkg.set_session_locks_store(locks)
         try:
             result = plugin_pkg._resolve_turn_route_hook(
@@ -480,7 +480,7 @@ class TestHookContract:
             assert result is not None
             assert result.get("route_source") == "manual"
             assert result["provider"] == "openai-codex"
-            assert result["model"] == "gpt-5.5"
+            assert result["model"] == "gpt-5.6-luna"
         finally:
             plugin_pkg.set_session_locks_store(None)
 

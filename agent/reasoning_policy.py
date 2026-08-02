@@ -42,14 +42,14 @@ DEFAULT_REASONING_POLICY: dict[str, Any] = {
     "deepseek_provider": "deepseek",
     "deepseek_flash_model": "deepseek-v4-flash",
     "deepseek_pro_model": "deepseek-v4-pro",
-    "codex_primary_model": "gpt-5.5",
-    "codex_fast_model": "gpt-5.4-mini",
+    "codex_primary_model": "gpt-5.6-luna",
+    "codex_fast_model": "gpt-5.6-luna",
     "codex_model_by_difficulty": {
-        "tiny": "gpt-5.4-mini",
-        "easy": "gpt-5.4-mini",
-        "medium": "gpt-5.5",
-        "hard": "gpt-5.5",
-        "very_hard": "gpt-5.5",
+        "tiny": "gpt-5.6-luna",
+        "easy": "gpt-5.6-luna",
+        "medium": "gpt-5.6-luna",
+        "hard": "gpt-5.6-luna",
+        "very_hard": "gpt-5.6-luna",
     },
     "reasoning": {
         "tiny": "low",
@@ -427,7 +427,16 @@ def fallback_chain_for_profile(policy: Mapping[str, Any], profile: TaskProfile, 
     if ds_provider.lower() != skip:
         chain.extend({"provider": ds_provider, "model": m} for m in ordered if m)
 
-    return chain
+    # Dedupe identical (provider, model) pairs — fast and primary can be the
+    # same model (e.g. codex fast == codex primary == gpt-5.6-luna).
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for entry in chain:
+        key = (entry["provider"], entry["model"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(entry)
+    return deduped
 
 
 def _stringify_message(message: Any) -> str:

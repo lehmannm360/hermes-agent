@@ -69,7 +69,7 @@ class TestAdaptiveRoutingPlugin:
         result = mod._resolve_turn_route_hook(
             user_message="hello",
             primary_provider="openai-codex",
-            primary_model="gpt-5.5",
+            primary_model="gpt-5.6-luna",
             session_key="sk",
             policy={"enabled": False},
         )
@@ -90,7 +90,7 @@ class TestAdaptiveRoutingPlugin:
         result = mod._resolve_turn_route_hook(
             user_message="implement a new feature for the gateway module",
             primary_provider="openai-codex",
-            primary_model="gpt-5.5",
+            primary_model="gpt-5.6-luna",
             session_key="sk",
             policy={**DEFAULT_REASONING_POLICY, "enabled": True},
         )
@@ -107,7 +107,7 @@ class TestAdaptiveRoutingPlugin:
         result = mod._resolve_turn_route_hook(
             user_message="fix the authentication bug in the login flow",
             primary_provider="openai-codex",
-            primary_model="gpt-5.5",
+            primary_model="gpt-5.6-luna",
             session_key="sk",
             policy={**DEFAULT_REASONING_POLICY, "enabled": True},
         )
