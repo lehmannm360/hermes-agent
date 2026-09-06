@@ -354,6 +354,7 @@ class TestPluginDiscovery:
         plugins_dir = tmp_path / "hermes_test" / "plugins"
         _make_plugin_dir(plugins_dir, "once_plugin")
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+        monkeypatch.setattr(PluginManager, "_scan_entry_points", lambda self: [])
 
         mgr = PluginManager()
         mgr.discover_and_load()
@@ -378,6 +379,7 @@ class TestPluginDiscovery:
         plugins_dir = tmp_path / "hermes_test" / "plugins"
         _make_plugin_dir(plugins_dir, "retry_plugin")
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+        monkeypatch.setattr(PluginManager, "_scan_entry_points", lambda self: [])
 
         mgr = PluginManager()
 
@@ -392,6 +394,7 @@ class TestPluginDiscovery:
         # A later call (with discovery healthy again) must do the real scan.
         monkeypatch.undo()
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+        monkeypatch.setattr(PluginManager, "_scan_entry_points", lambda self: [])
         mgr.discover_and_load()
         assert mgr._discovered is True
         non_bundled = {
@@ -405,6 +408,7 @@ class TestPluginDiscovery:
         plugins_dir = tmp_path / "hermes_test" / "plugins"
         (plugins_dir / "no_manifest").mkdir(parents=True)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+        monkeypatch.setattr(PluginManager, "_scan_entry_points", lambda self: [])
 
         mgr = PluginManager()
         mgr.discover_and_load()

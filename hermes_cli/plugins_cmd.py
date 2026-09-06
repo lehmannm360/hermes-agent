@@ -1100,8 +1100,60 @@ def _discover_entrypoint_plugins() -> list[tuple[str, str, str, str]]:
     return entries
 
 
-def _plugin_status(name: str, enabled: set, disabled: set, key: str = "") -> str:
-    """Return the user-facing activation state for a plugin name or key."""
+def _is_active_memory_provider(
+    name: str,
+    key: str,
+    plugin_path: Any = None,
+    source: str = "",
+) -> bool:
+    """Return whether a plugin-list entry is the selected memory provider.
+
+    Memory providers are an exclusive plugin category. Their activation is
+    controlled by ``memory.provider`` rather than ``plugins.enabled``. The
+    general plugin scanner can still expose both a user adapter directory and
+    its pip entry point, so identify the active entry from the provider
+    selection without importing arbitrary plugin code.
+    """
+    current = _get_current_memory_provider()
+    if not current:
+        return False
+
+    # Pip entry-point providers use the provider name as their registry key.
+    if source == "entrypoint" and (name == current or key == current):
+        return True
+
+    # User-installed provider adapters may use a descriptive manifest name
+    # (e.g. ``hermes-mnemosyne``) while living in ``plugins/mnemosyne``.
+    if source != "user" or not plugin_path:
+        return False
+    path = Path(str(plugin_path))
+    if path.name != current or not path.is_dir():
+        return False
+    init_file = path / "__init__.py"
+    try:
+        source_text = init_file.read_text(encoding="utf-8", errors="replace")[:8192]
+    except OSError:
+        return False
+    return "register_memory_provider" in source_text or "MemoryProvider" in source_text
+
+
+def _plugin_status(
+    name: str,
+    enabled: set,
+    disabled: set,
+    key: str = "",
+    *,
+    plugin_path: Any = None,
+    source: str = "",
+) -> str:
+    """Return the user-facing activation state for a plugin or provider.
+
+    General plugins use ``plugins.enabled`` / ``plugins.disabled``. Exclusive
+    providers use their category selector; a selected memory provider is
+    therefore ``active`` even when it is absent from the general allow-list.
+    """
+    if _is_active_memory_provider(name, key, plugin_path, source):
+        return "active"
     if name in disabled or key in disabled:
         return "disabled"
     if name in enabled or key in enabled:
@@ -1117,7 +1169,10 @@ def _filter_plugin_entries(entries: list, args: Any, enabled: set, disabled: set
     if getattr(args, "enabled", False):
         filtered = [
             entry for entry in filtered
-            if _plugin_status(entry[0], enabled, disabled, key=entry[5]) == "enabled"
+            if _plugin_status(
+                entry[0], enabled, disabled, key=entry[5],
+                plugin_path=entry[4], source=entry[3],
+            ) in {"enabled", "active"}
         ]
     return filtered
 
@@ -1142,7 +1197,10 @@ def cmd_list(args: Any | None = None) -> None:
         payload = [
             {
                 "name": name,
-                "status": _plugin_status(name, enabled, disabled, key=key),
+                "status": _plugin_status(
+                    name, enabled, disabled, key=key,
+                    plugin_path=_dir, source=source,
+                ),
                 "version": str(version),
                 "description": description,
                 "source": source,
@@ -1154,7 +1212,10 @@ def cmd_list(args: Any | None = None) -> None:
 
     if getattr(args, "plain", False):
         for name, version, _description, source, _dir, key in entries:
-            status = _plugin_status(name, enabled, disabled, key=key)
+            status = _plugin_status(
+                name, enabled, disabled, key=key,
+                plugin_path=_dir, source=source,
+            )
             print(f"{status:12} {source:8} {str(version):8} {name}")
         return
 
@@ -1170,23 +1231,26 @@ def cmd_list(args: Any | None = None) -> None:
     table.add_column("Source", style="dim")
 
     for name, version, description, source, _dir, key in entries:
-        status_name = _plugin_status(name, enabled, disabled, key=key)
+        status_name = _plugin_status(
+            name, enabled, disabled, key=key,
+            plugin_path=_dir, source=source,
+        )
         if status_name == "disabled":
             status = "[red]disabled[/red]"
-        elif status_name == "enabled":
-            status = "[green]enabled[/green]"
+        elif status_name in {"enabled", "active"}:
+            status = "[green]active[/green]" if status_name == "active" else "[green]enabled[/green]"
         else:
             status = "[yellow]not enabled[/yellow]"
         table.add_row(name, status, str(version), description, source)
 
     console.print()
     console.print(table)
-    console.print()
-    console.print("[dim]Compact view:[/dim] hermes plugins list --plain --no-bundled")
-    console.print("[dim]Interactive toggle:[/dim] hermes plugins")
-    console.print("[dim]Enable/disable:[/dim] hermes plugins enable/disable <name>")
-    console.print("[dim]Plugins are opt-in by default — only 'enabled' plugins load.[/dim]")
-
+    console.print(
+        "\n[dim]Compact view: hermes plugins list --plain --no-bundled\n"
+        "Interactive toggle: hermes plugins\n"
+        "Enable/disable: hermes plugins enable/disable <name>\n"
+        "General plugins are opt-in; exclusive providers are selected by category.[/dim]"
+    )
 
 # ---------------------------------------------------------------------------
 # Provider plugin discovery helpers

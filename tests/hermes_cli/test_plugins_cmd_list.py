@@ -69,6 +69,37 @@ def test_cmd_list_plain_compact_output(monkeypatch, capsys):
     assert "Search" not in out  # plain mode stays compact, no descriptions
 
 
+def test_active_memory_provider_status_and_enabled_filter(monkeypatch):
+    entries = [
+        (
+            "mnemosyne",
+            "0.5.0",
+            "Local memory",
+            "entrypoint",
+            "mnemosyne_hermes:register",
+            "mnemosyne",
+        )
+    ]
+    monkeypatch.setattr(plugins_cmd, "_get_current_memory_provider", lambda: "mnemosyne")
+
+    assert plugins_cmd._plugin_status(
+        "mnemosyne",
+        enabled=set(),
+        disabled=set(),
+        key="mnemosyne",
+        plugin_path="mnemosyne_hermes:register",
+        source="entrypoint",
+    ) == "active"
+
+    filtered = plugins_cmd._filter_plugin_entries(
+        entries,
+        _args(enabled=True),
+        enabled=set(),
+        disabled=set(),
+    )
+    assert filtered == entries
+
+
 def test_cmd_list_json_output(monkeypatch, capsys):
     entries = [("web-search-plus", "2.2.0", "Search", "git", None, "web-search-plus")]
     monkeypatch.setattr(plugins_cmd, "_discover_all_plugins", lambda: entries)
