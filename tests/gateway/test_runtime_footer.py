@@ -1,14 +1,11 @@
-"""Unit tests for gateway.runtime_footer — the opt-in runtime-metadata footer
+"""Unit tests for gateway.runtime_footer — the opt-in runtime footer
 appended to final gateway replies."""
 
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
-
 import pytest
 from gateway.runtime_footer import (
-    _codex_quota_used_percent_from_snapshot,
     _home_relative_cwd,
     _model_short,
     build_footer_line,
@@ -148,65 +145,13 @@ def test_format_footer_unknown_field_silently_ignored():
     assert out == "gpt-5.4 · 50%"
 
 
-def test_format_footer_route_reasoning_field_uses_compact_pipe_separator():
-    out = format_runtime_footer(
-        model="openai/gpt-5.5",
-        provider="openai-codex",
-        reasoning_effort="xhigh",
-        route_label="codex",
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-        fields=("route_reasoning",),
-    )
-    assert out == "codex | xhigh"
-
-
-def test_format_footer_codex_route_reasoning_includes_five_hour_quota_used_percent():
-    out = format_runtime_footer(
-        model="gpt-5.4-mini",
-        provider="openai-codex",
-        reasoning_effort="low",
-        route_label="codex",
-        codex_quota_used_percent=70.2,
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-        fields=("route_reasoning",),
-    )
-    assert out == "codex | mini-low | 70%"
-
-
-def test_format_footer_deepseek_route_reasoning_omits_cost_highlight():
-    out = format_runtime_footer(
-        model="deepseek-v4-flash",
-        provider="deepseek",
-        reasoning_effort="low",
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-        fields=("route_reasoning",),
-    )
-    assert out == "deepseek-v4-flash | low"
-
-
-def test_codex_quota_used_percent_from_snapshot_prefers_session_window():
-    snapshot = SimpleNamespace(
-        windows=(
-            SimpleNamespace(label="Weekly", used_percent=12.0),
-            SimpleNamespace(label="Session", used_percent=70.2),
-        )
-    )
-    assert _codex_quota_used_percent_from_snapshot(snapshot) == 70.2
-
-
 # ---------------------------------------------------------------------------
 # resolve_footer_config
 # ---------------------------------------------------------------------------
 
 def test_resolve_defaults_off_empty_config():
     cfg = resolve_footer_config({}, "telegram")
-    assert cfg == {"enabled": False, "fields": ["model", "context_pct", "cwd"], "style": "plain"}
+    assert cfg == {"enabled": False, "fields": ["model", "context_pct", "cwd"]}
 
 
 def test_resolve_global_enable():
@@ -301,53 +246,6 @@ def test_build_footer_per_platform_off_suppresses():
     assert out == ""
 
 
-def test_build_footer_route_reasoning_for_model_reasoning_footnote():
-    out = build_footer_line(
-        user_config={
-            "display": {
-                "runtime_footer": {
-                    "enabled": True,
-                    "fields": ["route_reasoning"],
-                }
-            }
-        },
-        platform_key="telegram",
-        model="gpt-5.5",
-        provider="openai-codex",
-        reasoning_effort="xhigh",
-        route_label="codex",
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-    )
-    assert out == "codex | xhigh"
-
-
-def test_build_footer_response_ref_field_and_italic_style():
-    out = build_footer_line(
-        user_config={
-            "display": {
-                "runtime_footer": {
-                    "enabled": True,
-                    "fields": ["route_reasoning", "response_ref"],
-                    "style": "italic",
-                }
-            }
-        },
-        platform_key="telegram",
-        model="openai/gpt-5.4-mini",
-        provider="openai-codex",
-        reasoning_effort="low",
-        route_label="codex",
-        codex_quota_used_percent=36.6,
-        response_ref="r-8f3a21c4",
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-    )
-    assert out == "*codex | mini-low | 37% · r-8f3a21c4*"
-
-
 def test_build_footer_no_data_returns_empty_even_when_enabled():
     # Enabled, but context_length is None AND cwd empty AND model empty ⇒ no fields
     out = build_footer_line(
@@ -360,37 +258,3 @@ def test_build_footer_no_data_returns_empty_even_when_enabled():
     # With no TERMINAL_CWD env either
     if not os.environ.get("TERMINAL_CWD"):
         assert out == ""
-
-
-def test_format_footer_model_fallback_when_route_reasoning_empty():
-    """When route_reasoning is in fields but has no data (no reasoning_effort),
-    model should appear as a standalone fallback."""
-    out = format_runtime_footer(
-        model="openai/gpt-5.4",
-        provider="manifest",
-        reasoning_effort=None,  # not configured → route_reasoning returns ""
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-        fields=("model", "route_reasoning", "response_ref"),
-        response_ref="r-abc123",
-    )
-    # model appears as fallback, route_reasoning skipped, response_ref appended
-    assert out == "gpt-5.4 · r-abc123"
-
-
-def test_format_footer_no_duplicate_model_when_route_reasoning_works():
-    """When route_reasoning produces output, model should NOT appear separately."""
-    out = format_runtime_footer(
-        model="gpt-5.5",
-        provider="openai-codex",
-        reasoning_effort="xhigh",
-        route_label="codex",
-        context_tokens=0,
-        context_length=None,
-        cwd="",
-        fields=("model", "route_reasoning", "response_ref"),
-        response_ref="r-abc123",
-    )
-    # "model" field is skipped when route_reasoning produces output
-    assert out == "codex | xhigh · r-abc123"

@@ -33,7 +33,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import shlex
 import site
 import sys
@@ -4520,90 +4519,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return model, runtime_kwargs
 
-    @staticmethod
-    def _load_reasoning_policy() -> dict:
-        """Load adaptive reasoning/routing policy from config.yaml."""
-        try:
-            import yaml as _y
-            from agent.reasoning_policy import DEFAULT_REASONING_POLICY
+    def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
+        """Build the effective model/runtime config for a single turn.
 
-            cfg_path = _hermes_home / "config.yaml"
-            raw_policy = {}
-            if cfg_path.exists():
-                with open(cfg_path, encoding="utf-8") as _f:
-                    cfg = _y.safe_load(_f) or {}
-                agent_cfg = cfg.get("agent") or {}
-                if isinstance(agent_cfg, dict):
-                    raw_policy = agent_cfg.get("reasoning_policy") or {}
-            merged = dict(DEFAULT_REASONING_POLICY)
-            if isinstance(raw_policy, dict):
-                merged.update(raw_policy)
-                if isinstance(DEFAULT_REASONING_POLICY.get("reasoning"), dict):
-                    reasoning = dict(DEFAULT_REASONING_POLICY["reasoning"])
-                    if isinstance(raw_policy.get("reasoning"), dict):
-                        reasoning.update(raw_policy["reasoning"])
-                    merged["reasoning"] = reasoning
-            return merged
-        except Exception:
-            try:
-                from agent.reasoning_policy import DEFAULT_REASONING_POLICY
+        Always uses the session's primary model/provider.  If `/fast` is
+        enabled and the model supports Priority Processing / Anthropic fast
+        mode, attach `request_overrides` so the API call is marked
+        accordingly.
+        """
+        from hermes_cli.models import resolve_fast_mode_overrides
 
-                return dict(DEFAULT_REASONING_POLICY)
-            except Exception:
-                return {"enabled": False}
-
-    @staticmethod
-    def _get_codex_quota_state() -> Any:
-        """Fetch/cache Codex quota for routing without blocking every turn."""
-        try:
-            from agent.reasoning_policy import CodexQuotaState
-        except Exception:
-            return None
-        now = time.monotonic()
-        cache = getattr(GatewayRunner, "_codex_quota_cache", None)
-        if isinstance(cache, dict) and now - float(cache.get("ts", 0.0)) < 60:
-            return cache.get("state")
-        used_percent = None
-        try:
-            from gateway.runtime_footer import _codex_quota_used_percent_from_snapshot
-
-            snapshot = fetch_account_usage("openai-codex")
-            used_percent = _codex_quota_used_percent_from_snapshot(snapshot)
-            state = CodexQuotaState.from_usage_snapshot(snapshot)
-        except Exception as exc:
-            logger.debug("Codex quota snapshot unavailable for routing: %s", exc)
-            state = CodexQuotaState(unavailable=True)
-        try:
-            setattr(
-                GatewayRunner,
-                "_codex_quota_cache",
-                {"ts": now, "state": state, "used_percent": used_percent},
-            )
-        except Exception:
-            pass
-        return state
-
-    @staticmethod
-    def _get_codex_quota_used_percent() -> Optional[float]:
-        """Return cached Codex 5-hour quota used percentage for footers."""
-        now = time.monotonic()
-        cache = getattr(GatewayRunner, "_codex_quota_cache", None)
-        if not isinstance(cache, dict) or now - float(cache.get("ts", 0.0)) >= 60:
-            GatewayRunner._get_codex_quota_state()
-            cache = getattr(GatewayRunner, "_codex_quota_cache", None)
-        if not isinstance(cache, dict):
-            return None
-        used = cache.get("used_percent")
-        if used is None:
-            return None
-        try:
-            return float(used)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _runtime_dict_from_kwargs(runtime_kwargs: dict) -> dict:
-        return {
+        runtime = {
             "api_key": runtime_kwargs.get("api_key"),
             "base_url": runtime_kwargs.get("base_url"),
             "provider": runtime_kwargs.get("provider"),
@@ -4614,39 +4540,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "credential_pool": runtime_kwargs.get("credential_pool"),
             "max_tokens": runtime_kwargs.get("max_tokens"),
         }
-
-    @staticmethod
-    def _route_signature(model: str, runtime: dict) -> tuple:
-        return (
-            model,
-            runtime.get("provider"),
-            runtime.get("base_url"),
-            runtime.get("api_mode"),
-            runtime.get("command"),
-            tuple(runtime.get("args") or []),
-        )
-
-    def _resolve_turn_agent_config(
-        self,
-        user_message: str,
-        model: str,
-        runtime_kwargs: dict,
-        *,
-        reasoning_config: Optional[dict] = None,
-        force_reasoning_config: bool = False,
-        session_key: str = "",
-    ) -> dict:
-        """Build the effective model/runtime config for a single turn.
-
-        Applies adaptive reasoning and MiMo-first, quota-aware routing when
-        ``agent.reasoning_policy.enabled`` is true.  Falls back to Codex then
-        DeepSeek per the policy chain.  Explicit per-session reasoning overrides
-        (from /reasoning) take precedence and keep the session's selected
-        model/provider stable.
-        """
-        from hermes_cli.models import resolve_fast_mode_overrides
-
-        runtime = self._runtime_dict_from_kwargs(runtime_kwargs)
         route = {
             "model": model,
             "runtime": runtime,
@@ -4660,184 +4553,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 tuple(runtime["args"]),
             ),
         }
-
-        if force_reasoning_config and reasoning_config:
-            route["reasoning_config"] = dict(reasoning_config)
-
-        # Detect active session model override so we can skip both the
-        # adaptive-routing hook AND core routing — the user explicitly
-        # chose a model via /model and it must not be overridden.
-        _has_session_override = bool(
-            session_key
-            and session_key in (getattr(self, "_session_model_overrides", {}) or {})
-        )
-
-        policy = self._load_reasoning_policy()
-        if bool(policy.get("enabled")) and not force_reasoning_config and not _has_session_override:
-            # Fire resolve_turn_route hook — cache-safe: only explicit turn
-            # inputs are passed, not mutable messages/history/toolsets/system.
-            # Dangerous returned keys are ignored.  Session overrides outrank
-            # this hook (enforced by the force_reasoning_config and
-            # _has_session_override gates above).
-            _DANGEROUS_ROUTE_KEYS = frozenset({
-                "messages", "history", "tools", "toolsets", "system", "memory",
-            })
-            _session_key_for_route = str(session_key or "")
-            _route_hook_overridden = False
-            _route_hook_final = False  # plugin owns the decision — skip core routing
-            try:
-                from hermes_cli.plugins import invoke_hook as _invoke_route_hook
-                _route_results = _invoke_route_hook(
-                    "resolve_turn_route",
-                    user_message=user_message,
-                    primary_provider=runtime.get("provider"),
-                    primary_model=model,
-                    session_key=_session_key_for_route,
-                    policy=policy,
-                )
-                for _rr in _route_results:
-                    if not isinstance(_rr, dict):
-                        continue
-                    # Filter out dangerous keys
-                    safe_overrides = {
-                        k: v for k, v in _rr.items() if k not in _DANGEROUS_ROUTE_KEYS
-                    }
-                    if safe_overrides.get("final_decision") is True:
-                        _route_hook_final = True
-                    if "provider" in safe_overrides or "model" in safe_overrides:
-                        new_provider = safe_overrides.get("provider", runtime.get("provider"))
-                        new_model = safe_overrides.get("model", model)
-                        try:
-                            from hermes_cli.runtime_provider import resolve_runtime_provider as _rrp
-                            resolved = _rrp(requested=new_provider, target_model=new_model)
-                            runtime = self._runtime_dict_from_kwargs(resolved)
-                            route["model"] = new_model
-                            route["runtime"] = runtime
-                            route["signature"] = self._route_signature(new_model, runtime)
-                            _route_hook_overridden = True
-                        except Exception:
-                            pass
-                    if "reasoning_effort" in safe_overrides:
-                        route["reasoning_config"] = {"effort": safe_overrides["reasoning_effort"]}
-                        route["reasoning_effort"] = safe_overrides["reasoning_effort"]
-                    if "route_label" in safe_overrides:
-                        route["route_label"] = safe_overrides["route_label"]
-                    if "runtime_provider" in safe_overrides:
-                        route["runtime"]["provider"] = safe_overrides["runtime_provider"]
-                    if "route_source" in safe_overrides:
-                        route["route_source"] = safe_overrides["route_source"]
-                    break  # first valid override wins
-            except Exception:
-                pass  # hook is advisory; errors are non-fatal
-
-            # When the plugin returns a final decision, do NOT let core
-            # ``decide_turn_route()`` overwrite it.
-            if _route_hook_final:
-                route["route_hook_final"] = True
-                # Stash the per-session lock pin for footer/route_source.
-                # ``getattr`` is intentional: tests can stub the
-                # function in isolation, and we want the production
-                # path to remain robust to a missing attribute.
-                _lock_map = getattr(self, "_session_model_lock", None)
-                if isinstance(_lock_map, dict):
-                    lock_pin = _lock_map.get(_session_key_for_route)
-                    if lock_pin:
-                        route["route_source"] = "manual"
-                        route["route_label"] = route.get("route_label") or "manual"
-                # The plugin's decision is final; rebuild the fallback
-                # chain to exclude the selected provider/model so runtime
-                # fallback doesn't retry what we just chose.  Then
-                # short-circuit the core routing block below by
-                # disabling the policy locally.
-                try:
-                    from agent.reasoning_policy import fallback_chain_for_profile, classify_task
-                    _fallback_profile = classify_task(user_message, policy)
-                    route["fallback_model"] = fallback_chain_for_profile(
-                        policy, _fallback_profile,
-                        exclude_provider=route["runtime"].get("provider") or "",
-                    )
-                except Exception:
-                    pass
-                # ``return`` would skip the rest of the function — but
-                # the caller still expects to see the request_overrides
-                # shape (fast-mode overrides + service_tier).  Falling
-                # through with a disabled policy is the path of least
-                # surprise: ``decide_turn_route`` returns the primary
-                # decision without touching provider/model/labels, and
-                # the plugin-set values on ``route`` win.  The condition
-                # below is what gates the rest of the core routing
-                # block — the disabled policy means the if-branch
-                # inside the try is a no-op.
-                policy = dict(policy)
-                policy["enabled"] = False
-                # Skip the core routing block entirely — its job is to
-                # overwrite the route with a fresh decide_turn_route
-                # call, which the plugin already did.  Block
-                # continues only to apply service_tier/fast-mode
-                # overrides below.
-                _skip_core_routing = True
-            else:
-                _skip_core_routing = False
-
-            if not _skip_core_routing and not _has_session_override:
-                try:
-                    from agent.reasoning_policy import (
-                        decide_turn_route,
-                        fallback_chain_for_profile,
-                        is_codex_provider,
-                    )
-
-                    quota = self._get_codex_quota_state() if is_codex_provider(runtime.get("provider")) else None
-                    decision = decide_turn_route(
-                        user_message,
-                        primary_provider=runtime.get("provider"),
-                        primary_model=model,
-                        quota=quota,
-                        policy=policy,
-                    )
-                    route["reasoning_config"] = decision.reasoning_config
-                    route["reasoning_effort"] = decision.reasoning_effort
-                    route["route_label"] = decision.route_label
-                    route["routing_decision"] = decision
-
-                    # Dynamic chain ordered by task profile, excluding the current
-                    # primary so the runtime doesn't retry what just failed.
-                    route["fallback_model"] = fallback_chain_for_profile(
-                        policy, decision.profile, exclude_provider=decision.provider
-                    )
-
-                    if (decision.provider, decision.model) != (runtime.get("provider"), model):
-                        try:
-                            from hermes_cli.runtime_provider import resolve_runtime_provider
-
-                            resolved = resolve_runtime_provider(
-                                requested=decision.provider,
-                                target_model=decision.model,
-                            )
-                            runtime = self._runtime_dict_from_kwargs(resolved)
-                            route["model"] = decision.model
-                            route["runtime"] = runtime
-                            route["signature"] = self._route_signature(decision.model, runtime)
-                            logger.info(
-                                "Adaptive routing selected %s/%s reason=%s effort=%s",
-                                decision.provider,
-                                decision.model,
-                                decision.fallback_reason or "policy",
-                                decision.reasoning_effort,
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Adaptive route to %s/%s failed, staying on primary: %s",
-                                decision.provider,
-                                decision.model,
-                                exc,
-                            )
-                            route["model"] = model
-                            route["runtime"] = self._runtime_dict_from_kwargs(runtime_kwargs)
-                            route["signature"] = self._route_signature(model, route["runtime"])
-                            route["route_label"] = "codex" if is_codex_provider(route["runtime"].get("provider")) else None
-                except Exception as exc:
-                    logger.debug("Adaptive reasoning policy skipped: %s", exc)
 
         service_tier = getattr(self, "_service_tier", None)
         if not service_tier:
@@ -6383,41 +6098,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 session_key,
             )
             return True  # handled (silently dropped); do not fall through
-
-        # --- Plugin authorization gate (busy path) ---
-        # Control commands bypass the busy path at the adapter level (Level 1
-        # guard), so no bypass check is needed here.  Fail-closed: when hooks
-        # are registered and none explicitly allow, deny.
-        try:
-            from hermes_cli.plugins import (
-                has_hook as _has_hook_busy,
-                invoke_hook as _invoke_auth_hook_busy,
-            )
-            if _has_hook_busy("pre_gateway_authorize_message"):
-                _auth_busy_results = _invoke_auth_hook_busy(
-                    "pre_gateway_authorize_message",
-                    event=event,
-                    gateway=self,
-                    source=event.source,
-                )
-                if not any(
-                    isinstance(r, dict) and r.get("allow")
-                    for r in _auth_busy_results
-                ):
-                    logger.info(
-                        "pre_gateway_authorize_message denied (busy path): "
-                        "user=%s platform=%s session=%s",
-                        event.source.user_id,
-                        event.source.platform.value if event.source.platform else "unknown",
-                        session_key,
-                    )
-                    return True
-        except Exception as _auth_busy_exc:
-            logger.warning(
-                "pre_gateway_authorize_message busy-path failed: %s",
-                _auth_busy_exc,
-            )
-            return True  # fail-closed on hook error
 
         # --- Draining case (gateway restarting/stopping) ---
         if self._draining:
@@ -8370,16 +8050,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.warning(
                 "plugin discovery failed at gateway startup", exc_info=True,
             )
-
-        # Wire the adaptive-routing plugin's session-lock store to the
-        # class-level dict so the plugin's ``resolve_turn_route`` hook
-        # can read locks set by the slash-command path.  Done after
-        # ``discover_plugins()`` so the plugin module is importable.
-        try:
-            from plugins import adaptive_routing as _ar_plugin
-            _ar_plugin.set_session_locks_store(self._session_model_lock)
-        except Exception:
-            logger.debug("adaptive-routing lock store wire skipped", exc_info=True)
 
         # Register the generic relay adapter when a connector relay URL is
         # configured (GATEWAY_RELAY_URL / gateway.relay_url). No URL -> no-op, so
@@ -11237,54 +10907,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Record rate limit so subsequent messages are silently ignored
                     self.pairing_store._record_rate_limit(platform_name, source.user_id)
             return None
-
-        # --- Plugin authorization gate (pre_gateway_authorize_message) ---
-        # Fires after the core _is_user_authorized check for non-internal,
-        # non-control-command messages.  Control commands that bypass the
-        # active-session guard at the adapter level must also bypass this
-        # hook so /stop, /approve, /deny etc. always reach the runner.
-        # Fail-closed: when at least one hook callback is registered, the
-        # message is denied unless a callback explicitly returns
-        # {"allow": True}.  When no callbacks are registered, default
-        # (allow) behaviour is preserved.
-        if not is_internal:
-            _cmd = event.get_command()
-            _AUTH_HOOK_BYPASS = frozenset({
-                "stop", "new", "reset", "approve", "deny",
-                "status", "queue", "q", "background", "restart",
-            })
-            if _cmd not in _AUTH_HOOK_BYPASS:
-                try:
-                    from hermes_cli.plugins import (
-                        has_hook as _has_hook,
-                        invoke_hook as _invoke_auth_hook,
-                    )
-                    if _has_hook("pre_gateway_authorize_message"):
-                        _auth_results = _invoke_auth_hook(
-                            "pre_gateway_authorize_message",
-                            event=event,
-                            gateway=self,
-                            source=source,
-                        )
-                        _auth_allowed = any(
-                            isinstance(r, dict) and r.get("allow")
-                            for r in _auth_results
-                        )
-                        if not _auth_allowed:
-                            logger.info(
-                                "pre_gateway_authorize_message denied: "
-                                "user=%s platform=%s chat=%s",
-                                source.user_id,
-                                source.platform.value if source.platform else "unknown",
-                                source.chat_id or "unknown",
-                            )
-                            return None
-                except Exception as _auth_exc:
-                    logger.warning(
-                        "pre_gateway_authorize_message invocation failed: %s",
-                        _auth_exc,
-                    )
-                    return None  # fail-closed on hook error
 
         # Intercept messages that are responses to a pending /update prompt.
         # The update process (detached) wrote .update_prompt.json; the watcher
@@ -14548,66 +14170,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # streaming already delivered the body, we can't mutate the sent
             # text, so we fire a separate trailing send below.
             _footer_line = ""
-            _response_ref: str | None = None
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
-                _response_ref = "r-" + secrets.token_hex(4)
-
-                # Pick the right quota source for the footer: Codex for
-                # OpenAI OAuth (existing behavior), None for everything
-                # else (PAYG providers like DeepSeek, Opencode Go/Zen
-                # which intentionally expose no quota indicator, etc.).
-                # The footer itself decides whether to print the
-                # percentage based on provider policy.
-                _provider_for_footer = str(agent_result.get("provider") or "").strip().lower()
-                if _provider_for_footer in {"openai-codex", "codex"}:
-                    _footer_quota_pct = self._get_codex_quota_used_percent()
-                else:
-                    _footer_quota_pct = None
-
-                # Fire format_gateway_runtime_footer hook BEFORE the default
-                # builder.  First non-empty string from a callback replaces
-                # the default footer.  Hook never blocks response delivery.
-                try:
-                    from hermes_cli.plugins import invoke_hook as _invoke_footer_hook
-                    _hook_footer_results = _invoke_footer_hook(
-                        "format_gateway_runtime_footer",
-                        model=agent_result.get("model"),
-                        context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
-                        context_length=agent_result.get("context_length") or None,
-                        cwd=os.environ.get("TERMINAL_CWD", ""),
-                        provider=agent_result.get("provider"),
-                        reasoning_effort=agent_result.get("reasoning_effort"),
-                        route_label=agent_result.get("route_label"),
-                        codex_quota_used_percent=_footer_quota_pct,
-                        response_ref=_response_ref,
-                        platform_key=_platform_config_key(source.platform),
-                        user_config=_load_gateway_config(),
-                    )
-                    _plugin_footer = next(
-                        (r for r in _hook_footer_results if isinstance(r, str) and r.strip()),
-                        None,
-                    )
-                except Exception:
-                    _plugin_footer = None
-
-                if _plugin_footer:
-                    _footer_line = _plugin_footer
-                else:
-                    _footer_line = _bfl(
-                        user_config=_load_gateway_config(),
-                        platform_key=_platform_config_key(source.platform),
-                        model=agent_result.get("model"),
-                        context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
-                        context_length=agent_result.get("context_length") or None,
-                        cwd=os.environ.get("TERMINAL_CWD", ""),
-                        provider=agent_result.get("provider"),
-                        reasoning_effort=agent_result.get("reasoning_effort"),
-                        route_label=agent_result.get("route_label"),
-                        codex_quota_used_percent=_footer_quota_pct,
-                        response_ref=_response_ref,
-                        route_source=agent_result.get("route_source"),
-                    )
+                _footer_line = _bfl(
+                    user_config=_load_gateway_config(),
+                    platform_key=_platform_config_key(source.platform),
+                    model=agent_result.get("model"),
+                    context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
+                    context_length=agent_result.get("context_length") or None,
+                    cwd=os.environ.get("TERMINAL_CWD", ""),
+                )
             except Exception as _footer_err:
                 logger.debug("runtime_footer build failed: %s", _footer_err)
                 _footer_line = ""
@@ -14911,46 +14483,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             session_entry.session_id, entry,
                             skip_db=agent_persisted,
                         )
-
-            # Persist the response reference ID (in footer) → DB mapping.
-            # The ref was generated before the footer was built; now that
-            # messages are persisted, we can look up the last assistant
-            # message and record the mapping.  Best-effort — failures are
-            # logged but never block the turn.
-            if _response_ref and self._session_db and response:
-                _row = None
-                _ref_created = False
-                try:
-                    _row = self._session_db.get_last_assistant_message(
-                        session_entry.session_id,
-                    )
-                    if _row:
-                        self._session_db.create_response_ref(
-                            session_id=session_entry.session_id,
-                            message_id=_row["id"],
-                            ref_id=_response_ref,
-                        )
-                        _ref_created = True
-                except Exception as _ref_err:
-                    logger.debug("response_ref persist failed: %s", _ref_err)
-
-                # Fire on_final_response_persisted notification hook only after
-                # the assistant row and response-ref mapping both exist.
-                # Pure notification — never blocks response delivery.
-                if _ref_created and _row and _response_ref:
-                    try:
-                        from hermes_cli.plugins import invoke_hook as _invoke_persisted_hook
-                        _invoke_persisted_hook(
-                            "on_final_response_persisted",
-                            session_id=session_entry.session_id,
-                            message_id=_row["id"],
-                            ref_id=_response_ref,
-                            platform=source.platform.value if source.platform else "",
-                            chat_id=source.chat_id or "",
-                            session_key=session_key,
-                        )
-                    except Exception:
-                        pass  # notification-only hook; errors are non-fatal
 
             # Token counts and model are now persisted by the agent directly.
             # Keep only last_prompt_tokens here for context-window tracking and
@@ -16260,7 +15792,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._reasoning_config = reasoning_config
             self._service_tier = self._resolve_session_service_tier(source=source)
             turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
-            effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
 
             # Enrich the prompt with image descriptions so the background
             # agent can see user-attached images (same as the main flow).
@@ -16289,7 +15820,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     verbose_logging=False,
                     enabled_toolsets=enabled_toolsets,
                     disabled_toolsets=disabled_toolsets,
-                    reasoning_config=effective_reasoning_config,
+                    reasoning_config=reasoning_config,
                     service_tier=self._service_tier,
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
@@ -21875,18 +21406,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     log_message="interim_assistant_callback scheduling error",
                 )
 
-            turn_route = self._resolve_turn_agent_config(
-                message,
-                model,
-                runtime_kwargs,
-                reasoning_config=reasoning_config,
-                force_reasoning_config=(
-                    session_key in (getattr(self, "_session_reasoning_overrides", {}) or {})
-                ),
-                session_key=session_key,
-            )
-            effective_reasoning_config = turn_route.get("reasoning_config") or reasoning_config
-            turn_fallback_model = turn_route.get("fallback_model", self._fallback_model)
+            turn_route = self._resolve_turn_agent_config(message, model, runtime_kwargs)
 
             # Check agent cache — reuse the AIAgent from the previous message
             # in this session to preserve the frozen system prompt and tool
@@ -22112,7 +21632,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     disabled_toolsets=disabled_toolsets,
                     ephemeral_system_prompt=combined_ephemeral or None,
                     prefill_messages=self._prefill_messages or None,
-                    reasoning_config=effective_reasoning_config,
+                    reasoning_config=reasoning_config,
                     service_tier=self._service_tier,
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
@@ -22208,7 +21728,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             agent.notice_callback = _notice_callback_sync
             agent.notice_clear_callback = None
             agent.event_callback = _event_callback_sync
-            agent.reasoning_config = effective_reasoning_config
+            agent.reasoning_config = reasoning_config
             agent.service_tier = self._service_tier
             agent.request_overrides = turn_route.get("request_overrides") or {}
             # Must-deliver notes for THIS turn ride the current user message
@@ -22765,39 +22285,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _output_toks = getattr(_agent, "session_completion_tokens", 0)
                 _context_length = getattr(_agent.context_compressor, "context_length", 0) or 0
             _resolved_model = getattr(_agent, "model", None) if _agent else None
-            # Some providers (e.g. Opencode Go) report the actual model
-            # in the API response, which can differ from the request
-            # model.  Use it for display (footer) but keep
-            # _resolved_model for routing comparison below.
-            _display_model = getattr(_agent, "_last_response_model", None) if _agent else None
-            _display_model = _display_model or _resolved_model
-            _resolved_provider = getattr(_agent, "provider", None) if _agent else turn_route.get("runtime", {}).get("provider")
-            _resolved_reasoning_effort = None
-            if isinstance(effective_reasoning_config, dict):
-                _resolved_reasoning_effort = effective_reasoning_config.get("effort")
-            _resolved_route_label = turn_route.get("route_label")
-            # DEBUG: trace footer label resolution
-            logger.warning(
-                "FOOTER_DEBUG display_model=%r resolved_model=%r turn_route_model=%r "
-                "resolved_provider=%r turn_route_provider=%r route_label=%r",
-                _display_model, _resolved_model, turn_route.get("model"),
-                _resolved_provider, turn_route.get("runtime", {}).get("provider"),
-                _resolved_route_label,
-            )
-            if (
-                _agent
-                and (
-                    _resolved_provider != turn_route.get("runtime", {}).get("provider")
-                    or _resolved_model != turn_route.get("model")
-                    # Also clear when the API returned a different model than
-                    # the routing decision requested (e.g. opencode-go resolving
-                    # to a different model than the adaptive routing picked).
-                    or _display_model != turn_route.get("model")
-                )
-            ):
-                # A mid-turn fallback changed the actual model/provider.  Let
-                # runtime_footer derive the label from the final backend.
-                _resolved_route_label = None
 
             # Sync session_id immediately after run_conversation(). Compression
             # can rotate before a follow-up model call fails; the failure return
@@ -22926,10 +22413,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "input_tokens": _input_toks,
                     "output_tokens": _output_toks,
                     "model": _resolved_model,
-                    "provider": _resolved_provider,
-                    "reasoning_effort": _resolved_reasoning_effort,
-                    "route_label": _resolved_route_label,
-                    "route_source": turn_route.get("route_source"),
                     "context_length": _context_length,
                 }
 
@@ -23052,11 +22535,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "last_prompt_tokens": _last_prompt_toks,
                 "input_tokens": _input_toks,
                 "output_tokens": _output_toks,
-                "model": _display_model,
-                "provider": _resolved_provider,
-                "reasoning_effort": _resolved_reasoning_effort,
-                "route_label": _resolved_route_label,
-                "route_source": turn_route.get("route_source"),
+                "model": _resolved_model,
                 "context_length": _context_length,
                 "session_id": effective_session_id,
                 "response_previewed": result.get("response_previewed", False),

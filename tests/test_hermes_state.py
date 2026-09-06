@@ -1275,29 +1275,6 @@ class TestMessageStorage:
         assert isinstance(conversation[0].get("timestamp"), float)
         assert "observed" not in conversation[1]
 
-    def test_response_ref_maps_to_assistant_message_and_cascades_on_delete(self, db):
-        db.create_session(session_id="s1", source="telegram")
-        msg_id = db.append_message("s1", role="assistant", content="Original response")
-
-        ref_id = db.create_response_ref(
-            session_id="s1",
-            message_id=msg_id,
-            platform="telegram",
-            chat_id="123",
-            thread_id="456",
-        )
-        assert ref_id.startswith("r-") and len(ref_id) == 10
-
-        ref = db.get_response_ref(ref_id)
-        assert ref is not None
-        assert ref["message_id"] == msg_id
-        assert ref["platform"] == "telegram"
-        assert ref["chat_id"] == "123"
-        assert ref["thread_id"] == "456"
-
-        assert db.delete_session("s1") is True
-        assert db.get_response_ref(ref_id) is None
-
     def test_tool_response_does_not_increment_tool_count(self, db):
         """Tool responses (role=tool) should not increment tool_call_count.
 

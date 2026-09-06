@@ -120,41 +120,35 @@ The storage layout (§4, under `get_hermes_home()`), all Pydantic schemas (§6),
 classifier/recurrence/compiler/linter/eval logic (§7–§13), and every guardrail
 (§20) are unchanged. Only the package path and the three integration seams move.
 
-### Account-usage plugin pilot findings to carry forward
+### Plugin integration findings to carry forward
 
-The smaller `plugins/account_usage/` pilot validated the plugin-first migration
-path and surfaced several implementation details that should shape compiled
+Earlier plugin integration work validated several details that should shape compiled
 memory:
 
 1. **Plan the final consumer seam before extracting code.** A plugin CLI is not
-   enough if live runtime paths still import a core module. For compiled memory,
-   keep runtime integration hook-driven (`post_llm_call`) and CLI-driven only;
-   avoid designing a feature that later requires core modules to import the
-   plugin as a service.
-2. **Use temporary compatibility shims only as a migration step.** The account
-   usage migration first kept `agent/account_usage.py` as a shim, rewired
-   gateway/CLI callers to `plugins.account_usage.usage`, then restored the old
-   core file to an exact `origin/main` mirror. Compiled memory should not leave
-   permanent shims in `agent/` or `hermes_cli/`.
-3. **Patch tests to target the plugin module path.** Any monkeypatch target that
-   previously pointed at core must move to the plugin module. This caught hidden
-   dependency direction quickly in the pilot.
+   enough if live runtime paths still import a core module. Keep runtime
+   integration hook-driven (`post_llm_call`) and CLI-driven only; avoid designing
+   a feature that later requires core modules to import the plugin as a service.
+2. **Keep migration shims temporary.** If an integration needs a compatibility
+   bridge during development, remove it after callers use the final module path.
+   Compiled memory should not leave permanent shims in core packages.
+3. **Patch tests to target the final module path.** Any monkeypatch target that
+   points at a compatibility module must move to the implementation module before
+   the feature is considered complete.
 4. **Verify both feature tests and merge cleanliness.** Use targeted pytest for
    behavior, then verify retired core paths with `git diff --quiet origin/main --
    <path>`. `git status` alone can still show a path modified relative to a
    private-fork branch even when the working copy is byte-for-byte upstream.
-5. **Prefer importable directory names for direct test ergonomics.**
-   `plugins/account_usage/` was easy to import directly in tests. If compiled
-   memory keeps the manifest/display name `compiled-memory`, make sure the test
-   harness imports via the plugin loader or clearly maps the on-disk slug to the
-   Python module name (`compiled_memory`).
+5. **Prefer importable directory names for direct test ergonomics.** If the
+   display name contains punctuation, map it clearly to an importable module name
+   in the plugin loader and tests.
 6. **Keep plugin registration thin.** `register(ctx)` should wire hooks/CLI and
-   delegate all behavior to small modules. This made the pilot easy to test with
-   a fake `PluginContext` and should be repeated here.
-7. **Document cleanup in the manual as part of acceptance.** The pilot was not
-   considered complete until the active-customizations manual reflected the
-   pluginized ownership and removed retired core files from the changed-file
-   list.
+   delegate all behavior to small modules. This keeps the plugin easy to test with
+   a fake `PluginContext`.
+7. **Document cleanup in the manual as part of acceptance.** The feature is not
+   complete until active documentation reflects pluginized ownership and retired
+   core paths are absent from the changed-file list.
+
 
 ## 3. Current repo anchors
 
@@ -388,7 +382,6 @@ Models:
   - `timestamp`
   - `profile`
   - `session_id`
-  - `response_ref`
   - `type`
   - `severity`
   - `raw_feedback`
@@ -577,7 +570,7 @@ Rules (unchanged):
 - Best-effort only; gated by `plugins.entries.compiled-memory.feedback_capture` (default on).
 - Wrap all failures; never block user response. (`invoke_hook` also isolates per-callback.)
 - Skip non-string/multimodal input.
-- Store `response_ref`, not full assistant response.
+- Store the session identifier, not the full assistant response.
 - Avoid capturing normal first-turn task requests unless a correction pattern matches.
 
 ### Integration (no core-file edit)
@@ -1136,7 +1129,7 @@ cron line: hermes compiled-memory compile … # via existing `hermes cron` tooli
 ### Privacy/security
 
 - Do not store full assistant responses by default.
-- Store best-effort `response_ref` and minimal metadata only.
+- Store the session identifier and minimal metadata only.
 - Redact obvious secrets at capture time before JSONL persistence.
 - Linter still flags possible secrets in already-captured raw feedback as a second line of defense.
 

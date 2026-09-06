@@ -22,7 +22,6 @@ import os
 import random
 import re
 import sqlite3
-import secrets
 import sys
 import threading
 import time
@@ -1180,16 +1179,6 @@ CREATE TABLE IF NOT EXISTS session_model_usage (
     PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
 );
 
-CREATE TABLE IF NOT EXISTS response_refs (
-    ref_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    platform TEXT,
-    chat_id TEXT,
-    thread_id TEXT,
-    created_at REAL NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -1236,8 +1225,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_response_refs_message ON response_refs(message_id);
-CREATE INDEX IF NOT EXISTS idx_response_refs_session ON response_refs(session_id);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);
@@ -6471,24 +6458,6 @@ class SessionDB:
             return msg_id
 
         return self._execute_write(_do)
-
-    def create_response_ref(self, session_id: str, message_id: int, ref_id: str | None = None, platform: str | None = None, chat_id: str | None = None, thread_id: str | None = None) -> str:
-        """Persist a plugin-facing reference to an existing assistant row."""
-        ref_id = ref_id or "r-" + secrets.token_hex(4)
-        def _do(conn):
-            conn.execute("INSERT INTO response_refs (ref_id, session_id, message_id, platform, chat_id, thread_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (ref_id, session_id, message_id, platform, chat_id, thread_id, time.time()))
-            return ref_id
-        return self._execute_write(_do)
-
-    def get_response_ref(self, ref_id: str) -> dict | None:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM response_refs WHERE ref_id = ?", (ref_id,)).fetchone()
-        return dict(row) if row else None
-
-    def get_last_assistant_message(self, session_id: str) -> dict | None:
-        with self._lock:
-            row = self._conn.execute("SELECT id, content FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
-        return dict(row) if row else None
 
     def set_latest_matching_message_display_kind(
         self, session_id: str, *, role: str, content: str, display_kind: str,
